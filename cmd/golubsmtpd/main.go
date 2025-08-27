@@ -9,7 +9,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/pawciobiel/golubsmtpd/internal/auth"
 	"github.com/pawciobiel/golubsmtpd/internal/config"
+	"github.com/pawciobiel/golubsmtpd/internal/logging"
 	"github.com/pawciobiel/golubsmtpd/internal/server"
 )
 
@@ -25,14 +27,21 @@ func main() {
 	}
 
 	// Setup logging
-	logger := config.SetupLogging(cfg)
+	logger := logging.Setup(&cfg.Logging)
 	logger.Info("Starting golubsmtpd", "version", "dev")
 
+	// Create authenticator
+	ctx := context.Background()
+	authenticator, err := auth.CreateAuthenticator(ctx, &cfg.Auth, logger)
+	if err != nil {
+		log.Fatal("Failed to create authenticator:", err)
+	}
+	defer authenticator.Close()
+
 	// Create server
-	srv := server.New(cfg, logger)
+	srv := server.New(cfg, logger, authenticator)
 
 	// Start server
-	ctx := context.Background()
 	if err := srv.Start(ctx); err != nil {
 		log.Fatal("Failed to start server:", err)
 	}

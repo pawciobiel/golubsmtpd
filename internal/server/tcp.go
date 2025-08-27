@@ -8,8 +8,14 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/pawciobiel/golubsmtpd/internal/auth"
 	"github.com/pawciobiel/golubsmtpd/internal/config"
+	"github.com/pawciobiel/golubsmtpd/internal/security"
 	"github.com/pawciobiel/golubsmtpd/internal/smtp"
+)
+
+const (
+	UnknownClientIP = "unknown"
 )
 
 type Server struct {
@@ -18,53 +24,63 @@ type Server struct {
 	listener net.Listener
 	wg       sync.WaitGroup
 	shutdown chan struct{}
-	
+
+	// Security checkers
+	rdnsChecker  *security.RDNSChecker
+	dnsblChecker *security.DNSBLChecker
+
+	// Authentication
+	authenticator auth.Authenticator
+
 	// Lock-free connection tracking
 	totalConnections int64    // atomic counter
-	ipConnections   sync.Map  // map[string]*int64 - IP -> connection count
+	ipConnections    sync.Map // map[string]*int64 - IP -> connection count
 }
 
-func New(cfg *config.Config, logger *slog.Logger) *Server {
+func New(cfg *config.Config, logger *slog.Logger, authenticator auth.Authenticator) *Server {
 	return &Server{
-		config:   cfg,
-		logger:   logger,
-		shutdown: make(chan struct{}),
+		config:        cfg,
+		logger:        logger,
+		shutdown:      make(chan struct{}),
+		rdnsChecker:   security.NewRDNSChecker(&cfg.Security.ReverseDNS, logger),
+		dnsblChecker:  security.NewDNSBLChecker(&cfg.Security.DNSBL, logger),
+		authenticator: authenticator,
 	}
 }
 
 func (s *Server) Start(ctx context.Context) error {
 	addr := fmt.Sprintf("%s:%d", s.config.Server.Bind, s.config.Server.Port)
-	
+
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("failed to listen on %s: %w", addr, err)
 	}
-	
+
 	s.listener = listener
 	s.logger.Info("SMTP server started", "address", addr)
-	
+
 	// Start accepting connections
 	s.wg.Add(1)
 	go s.acceptLoop(ctx)
-	
+
 	return nil
 }
 
 func (s *Server) Stop(ctx context.Context) error {
 	s.logger.Info("Shutting down SMTP server")
 	close(s.shutdown)
-	
+
 	if s.listener != nil {
 		s.listener.Close()
 	}
-	
+
 	// Wait for all goroutines to finish with timeout
 	done := make(chan struct{})
 	go func() {
 		s.wg.Wait()
 		close(done)
 	}()
-	
+
 	select {
 	case <-done:
 		s.logger.Info("SMTP server stopped gracefully")
@@ -77,14 +93,14 @@ func (s *Server) Stop(ctx context.Context) error {
 
 func (s *Server) acceptLoop(ctx context.Context) {
 	defer s.wg.Done()
-	
+
 	for {
 		select {
 		case <-s.shutdown:
 			return
 		default:
 		}
-		
+
 		conn, err := s.listener.Accept()
 		if err != nil {
 			select {
@@ -95,32 +111,38 @@ func (s *Server) acceptLoop(ctx context.Context) {
 				continue
 			}
 		}
-		
+
 		clientIP := getClientIP(conn)
-		
+
 		// Check limits BEFORE spawning goroutine
 		if !s.canAcceptConnection(clientIP) {
 			conn.Close()
 			continue
 		}
-		
+
 		// Track connection
 		s.trackConnection(clientIP)
-		
+
 		s.wg.Add(1)
 		go s.handleConnection(ctx, conn, clientIP)
 	}
 }
 
 func (s *Server) canAcceptConnection(clientIP string) bool {
+	// Reject connections with invalid IP addresses
+	if clientIP == UnknownClientIP {
+		s.logger.Warn("Connection rejected: unable to determine client IP")
+		return false
+	}
+
 	// Check total connection limit (atomic read)
 	totalConns := atomic.LoadInt64(&s.totalConnections)
 	if totalConns >= int64(s.config.Server.MaxConnections) {
-		s.logger.Warn("Connection rejected: max connections reached", 
+		s.logger.Warn("Connection rejected: max connections reached",
 			"current", totalConns, "max", s.config.Server.MaxConnections)
 		return false
 	}
-	
+
 	// Check per-IP connection limit (sync.Map)
 	ipConns := s.getIPConnectionCount(clientIP)
 	if ipConns >= s.config.Server.MaxConnectionsPerIP {
@@ -128,7 +150,7 @@ func (s *Server) canAcceptConnection(clientIP string) bool {
 			"ip", clientIP, "current", ipConns, "max", s.config.Server.MaxConnectionsPerIP)
 		return false
 	}
-	
+
 	return true
 }
 
@@ -165,15 +187,43 @@ func (s *Server) decrementIPConnection(ip string) {
 	}
 }
 
+func (s *Server) performSecurityChecks(ctx context.Context, clientIP string) bool {
+	rdnsResult := s.rdnsChecker.Lookup(ctx, clientIP)
+	if !rdnsResult.Valid {
+		s.logger.Warn("rDNS check failed",
+			"client_ip", clientIP,
+			"hostname", rdnsResult.Hostname,
+			"error", rdnsResult.Error)
+		return false
+	}
+
+	dnsblResults := s.dnsblChecker.CheckIP(ctx, clientIP)
+	for _, result := range dnsblResults {
+		if result.Listed && s.dnsblChecker.ShouldReject() {
+			s.logger.Warn("IP listed in DNSBL, rejecting connection",
+				"client_ip", clientIP,
+				"provider", result.Provider,
+				"response_codes", result.ResponseCodes)
+			return false
+		}
+	}
+
+	return true
+}
+
 func (s *Server) handleConnection(ctx context.Context, conn net.Conn, clientIP string) {
 	defer s.wg.Done()
 	defer s.untrackConnection(clientIP)
 	defer conn.Close()
-	
+
 	s.logger.Info("New connection accepted", "client_ip", clientIP)
-	
-	// Create and handle SMTP session
-	session := smtp.NewSession(s.config, s.logger, conn, clientIP)
+
+	if !s.performSecurityChecks(ctx, clientIP) {
+		s.logger.Warn("Connection rejected due to security checks", "client_ip", clientIP)
+		return
+	}
+
+	session := smtp.NewSession(s.config, s.logger, conn, clientIP, s.authenticator)
 	if err := session.Handle(ctx); err != nil {
 		s.logger.Debug("SMTP session ended", "client_ip", clientIP, "error", err)
 	} else {
@@ -187,5 +237,5 @@ func getClientIP(conn net.Conn) string {
 			return tcpAddr.IP.String()
 		}
 	}
-	return "unknown"
+	return UnknownClientIP
 }

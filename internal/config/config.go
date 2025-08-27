@@ -3,12 +3,12 @@ package config
 import "time"
 
 type Config struct {
-	Server   ServerConfig            `yaml:"server"`
-	TLS      TLSConfig              `yaml:"tls"`
-	Maildir  MaildirConfig          `yaml:"maildir"`
-	Auth     AuthConfig             `yaml:"auth"`
-	Security SecurityConfig         `yaml:"security"`
-	Logging  LoggingConfig          `yaml:"logging"`
+	Server   ServerConfig   `yaml:"server"`
+	TLS      TLSConfig      `yaml:"tls"`
+	Maildir  MaildirConfig  `yaml:"maildir"`
+	Auth     AuthConfig     `yaml:"auth"`
+	Security SecurityConfig `yaml:"security"`
+	Logging  LoggingConfig  `yaml:"logging"`
 }
 
 type ServerConfig struct {
@@ -17,8 +17,11 @@ type ServerConfig struct {
 	Hostname            string        `yaml:"hostname"`
 	MaxConnections      int           `yaml:"max_connections"`
 	MaxConnectionsPerIP int           `yaml:"max_connections_per_ip"`
+	MaxRecipients       int           `yaml:"max_recipients"`
+	MaxMessageSize      int           `yaml:"max_message_size"`
 	ReadTimeout         time.Duration `yaml:"read_timeout"`
 	WriteTimeout        time.Duration `yaml:"write_timeout"`
+	EmailValidation     []string      `yaml:"email_validation"`
 }
 
 type TLSConfig struct {
@@ -59,6 +62,11 @@ type LoggingConfig struct {
 	Format string `yaml:"format"`
 }
 
+type UserConfig struct {
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
+}
+
 func DefaultConfig() *Config {
 	return &Config{
 		Server: ServerConfig{
@@ -67,8 +75,11 @@ func DefaultConfig() *Config {
 			Hostname:            "localhost",
 			MaxConnections:      10000,
 			MaxConnectionsPerIP: 1000,
+			MaxRecipients:       100,
+			MaxMessageSize:      10 * 1024 * 1024, // 10MB
 			ReadTimeout:         30 * time.Second,
 			WriteTimeout:        30 * time.Second,
+			EmailValidation:     []string{"basic"},
 		},
 		TLS: TLSConfig{
 			Enabled: false,

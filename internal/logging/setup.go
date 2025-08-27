@@ -1,13 +1,15 @@
-package config
+package logging
 
 import (
 	"log/slog"
 	"os"
+
+	"github.com/pawciobiel/golubsmtpd/internal/config"
 )
 
-func SetupLogging(config *Config) *slog.Logger {
+func Setup(logConfig *config.LoggingConfig) *slog.Logger {
 	var level slog.Level
-	switch config.Logging.Level {
+	switch logConfig.Level {
 	case "debug":
 		level = slog.LevelDebug
 	case "info":
@@ -25,7 +27,7 @@ func SetupLogging(config *Config) *slog.Logger {
 	}
 
 	var handler slog.Handler
-	switch config.Logging.Format {
+	switch logConfig.Format {
 	case "json":
 		handler = slog.NewJSONHandler(os.Stdout, opts)
 	default:
