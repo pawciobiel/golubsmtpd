@@ -130,6 +130,7 @@ func TestSMTPMailFlow(t *testing.T) {
 			// Start session in goroutine
 			session := NewSession(cfg, slog.New(slog.NewTextHandler(os.Stderr, nil)), serverConn, "127.0.0.1", mockAuth)
 
+
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 
@@ -209,7 +210,6 @@ func TestSMTPDotStuffing(t *testing.T) {
 	defer clientConn.Close()
 
 	session := NewSession(cfg, slog.New(slog.NewTextHandler(os.Stderr, nil)), serverConn, "127.0.0.1", mockAuth)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
