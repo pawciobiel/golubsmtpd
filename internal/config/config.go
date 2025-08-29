@@ -22,6 +22,10 @@ type ServerConfig struct {
 	ReadTimeout         time.Duration `yaml:"read_timeout"`
 	WriteTimeout        time.Duration `yaml:"write_timeout"`
 	EmailValidation     []string      `yaml:"email_validation"`
+	LocalDomains        []string      `yaml:"local_domains"`
+	VirtualDomains      []string      `yaml:"virtual_domains"`
+	RelayDomains        []string      `yaml:"relay_domains"`
+	SpoolDir            string        `yaml:"spool_dir"`
 }
 
 type TLSConfig struct {
@@ -35,8 +39,8 @@ type MaildirConfig struct {
 }
 
 type AuthConfig struct {
-	Plugin  string                            `yaml:"plugin"`
-	Plugins map[string]map[string]interface{} `yaml:"plugins"`
+	PluginChain []string                          `yaml:"plugin_chain"` // Ordered plugin chain
+	Plugins     map[string]map[string]interface{} `yaml:"plugins"`
 }
 
 type SecurityConfig struct {
@@ -75,11 +79,15 @@ func DefaultConfig() *Config {
 			Hostname:            "localhost",
 			MaxConnections:      10000,
 			MaxConnectionsPerIP: 1000,
-			MaxRecipients:       100,
+			MaxRecipients:       1000, // RFC 5321 recommends 1000+ for production
 			MaxMessageSize:      10 * 1024 * 1024, // 10MB
 			ReadTimeout:         30 * time.Second,
 			WriteTimeout:        30 * time.Second,
 			EmailValidation:     []string{"basic"},
+			LocalDomains:        []string{"localhost"}, // System users
+			VirtualDomains:      []string{"mail.localhost"}, // Virtual users
+			RelayDomains:        []string{}, // No relay by default
+			SpoolDir:            "/var/spool/golubsmtpd",
 		},
 		TLS: TLSConfig{
 			Enabled: false,
@@ -88,8 +96,8 @@ func DefaultConfig() *Config {
 			BasePath: "/var/mail",
 		},
 		Auth: AuthConfig{
-			Plugin:  "file",
-			Plugins: make(map[string]map[string]interface{}),
+			PluginChain: []string{"memory"}, // Default single plugin
+			Plugins:     make(map[string]map[string]interface{}),
 		},
 		Security: SecurityConfig{
 			ReverseDNS: ReverseDNSConfig{

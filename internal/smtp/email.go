@@ -263,3 +263,23 @@ func (v *EmailValidator) ParseRcptToCommand(args []string) (*EmailAddress, error
 
 	return v.ParseEmailAddress(fullArg)
 }
+
+// ValidateHelloHostname validates a hostname from HELO/EHLO command
+func ValidateHelloHostname(hostname string) error {
+	if hostname == "" {
+		return fmt.Errorf("hostname cannot be empty")
+	}
+
+	if len(hostname) > 253 {
+		return fmt.Errorf("hostname too long")
+	}
+
+	// Basic hostname validation regex
+	hostnameRegex := regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$`)
+	
+	if !hostnameRegex.MatchString(hostname) {
+		return fmt.Errorf("invalid hostname format")
+	}
+
+	return nil
+}

@@ -51,8 +51,8 @@ func validateConfig(config *Config) error {
 		return fmt.Errorf("maildir base_path cannot be empty")
 	}
 
-	if config.Auth.Plugin == "" {
-		return fmt.Errorf("auth plugin cannot be empty")
+	if len(config.Auth.PluginChain) == 0 {
+		return fmt.Errorf("auth plugin_chain cannot be empty")
 	}
 
 	validLogLevels := map[string]bool{

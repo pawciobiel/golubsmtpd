@@ -28,7 +28,7 @@ const (
 	StatusParamNotImpl      = 504
 	StatusNotAuthorized     = 530
 	StatusAuthRequired      = 535
-	StatusMailboxNotFound   = 550
+	StatusMailboxUnavailable = 550
 	StatusUserNotLocal      = 551
 	StatusExceededStorage   = 552
 	StatusMailboxName       = 553
@@ -54,7 +54,7 @@ var ResponseMessages = map[int]string{
 	StatusParamNotImpl:        "Command parameter not implemented",
 	StatusNotAuthorized:       "Access denied",
 	StatusAuthRequired:        "Authentication credentials invalid",
-	StatusMailboxNotFound:     "Requested action not taken: mailbox unavailable",
+	StatusMailboxUnavailable:  "Requested action not taken: mailbox unavailable",
 	StatusUserNotLocal:        "User not local",
 	StatusExceededStorage:     "Requested mail action aborted: exceeded storage allocation",
 	StatusMailboxName:         "Requested action not taken: mailbox name not allowed",

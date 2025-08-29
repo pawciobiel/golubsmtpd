@@ -11,6 +11,7 @@ import (
 
 	"github.com/pawciobiel/golubsmtpd/internal/auth"
 	"github.com/pawciobiel/golubsmtpd/internal/config"
+	"github.com/pawciobiel/golubsmtpd/internal/queue"
 )
 
 // SessionState represents the current state of an SMTP session
@@ -38,12 +39,13 @@ type Session struct {
 	emailValidator *EmailValidator
 
 	// Session state
-	state         SessionState
-	helo          string
-	authenticated bool
-	username      string
-	mailFrom      string
-	rcptTo        []string
+	state               SessionState
+	clientHelloHostname string
+	authenticated       bool
+	username            string
+
+	// Message being built during session
+	currentMessage *queue.Message
 
 	// Security checks
 	reverseDNS   string
@@ -62,8 +64,36 @@ func NewSession(cfg *config.Config, logger *slog.Logger, conn net.Conn, clientIP
 		authenticator:  authenticator,
 		emailValidator: NewEmailValidator(cfg),
 		state:          StateConnected,
-		rcptTo:         make([]string, 0),
 	}
+}
+
+// containsDomain checks if a domain exists in a slice (case-insensitive)
+func containsDomain(domains []string, domain string) bool {
+	for _, d := range domains {
+		if strings.EqualFold(d, domain) {
+			return true
+		}
+	}
+	return false
+}
+
+// classifyDomain determines the domain type for recipient classification
+func (s *Session) classifyDomain(domain string) queue.RecipientType {
+	if containsDomain(s.config.Server.LocalDomains, domain) {
+		return queue.RecipientLocal
+	}
+	if containsDomain(s.config.Server.VirtualDomains, domain) {
+		return queue.RecipientVirtual
+	}
+	if containsDomain(s.config.Server.RelayDomains, domain) {
+		return queue.RecipientRelay
+	}
+	return queue.RecipientExternal
+}
+
+// validateUserWithChain tries authentication plugins in chain order
+func (s *Session) validateUserWithChain(ctx context.Context, email string) bool {
+	return s.authenticator.ValidateUser(ctx, email)
 }
 
 // Handle processes the SMTP session
@@ -101,7 +131,7 @@ func (s *Session) Handle(ctx context.Context) error {
 
 		s.logger.Debug("Received command", "command", line, "client_ip", s.clientIP)
 
-		if err := s.processCommand(line); err != nil {
+		if err := s.processCommand(ctx, line); err != nil {
 			s.logger.Error("Error processing command", "error", err, "command", line)
 			return err
 		}
@@ -116,7 +146,7 @@ func (s *Session) sendGreeting() error {
 	return s.writeResponse(greeting)
 }
 
-func (s *Session) processCommand(line string) error {
+func (s *Session) processCommand(ctx context.Context, line string) error {
 	// Parse command and arguments
 	parts := strings.Fields(line)
 	if len(parts) == 0 {
@@ -128,50 +158,60 @@ func (s *Session) processCommand(line string) error {
 
 	switch command {
 	case "HELO":
-		return s.handleHelo(args)
+		return s.handleHelo(ctx, args)
 	case "EHLO":
-		return s.handleEhlo(args)
+		return s.handleEhlo(ctx, args)
 	case "AUTH":
-		return s.handleAuth(args)
+		return s.handleAuth(ctx, args)
 	case "MAIL":
-		return s.handleMail(args)
+		return s.handleMail(ctx, args)
 	case "RCPT":
-		return s.handleRcpt(args)
+		return s.handleRcpt(ctx, args)
 	case "DATA":
-		return s.handleData(args)
+		return s.handleData(ctx, args)
 	case "RSET":
-		return s.handleRset(args)
+		return s.handleRset(ctx, args)
 	case "NOOP":
-		return s.handleNoop(args)
+		return s.handleNoop(ctx, args)
 	case "QUIT":
-		return s.handleQuit(args)
+		return s.handleQuit(ctx, args)
 	default:
 		return s.writeResponse(Response(StatusCommandNotImpl, "Command not implemented"))
 	}
 }
 
-func (s *Session) handleHelo(args []string) error {
+func (s *Session) handleHelo(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return s.writeResponse(Response(StatusParamError, "HELO requires domain"))
 	}
 
-	s.helo = args[0]
+	hostname := args[0]
+	if err := ValidateHelloHostname(hostname); err != nil {
+		return s.writeResponse(Response(StatusParamError, "Invalid hostname"))
+	}
+
+	s.clientHelloHostname = hostname
 	s.state = StateGreeted
-	response := fmt.Sprintf("250 %s Hello %s [%s]", s.hostname, s.helo, s.clientIP)
+	response := fmt.Sprintf("250 %s Hello %s [%s]", s.hostname, s.clientHelloHostname, s.clientIP)
 	return s.writeResponse(response)
 }
 
-func (s *Session) handleEhlo(args []string) error {
+func (s *Session) handleEhlo(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return s.writeResponse(Response(StatusParamError, "EHLO requires domain"))
 	}
 
-	s.helo = args[0]
+	hostname := args[0]
+	if err := ValidateHelloHostname(hostname); err != nil {
+		return s.writeResponse(Response(StatusParamError, "Invalid hostname"))
+	}
+
+	s.clientHelloHostname = hostname
 	s.state = StateGreeted
 
 	// Send multi-line response
 	responses := []string{
-		fmt.Sprintf("250-%s Hello %s [%s]", s.hostname, s.helo, s.clientIP),
+		fmt.Sprintf("250-%s Hello %s [%s]", s.hostname, s.clientHelloHostname, s.clientIP),
 		"250-AUTH PLAIN LOGIN",
 		"250 HELP",
 	}
@@ -189,7 +229,7 @@ func (s *Session) handleEhlo(args []string) error {
 	return nil
 }
 
-func (s *Session) handleAuth(args []string) error {
+func (s *Session) handleAuth(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return s.writeResponse(Response(StatusParamError, "AUTH requires mechanism"))
 	}
@@ -206,15 +246,15 @@ func (s *Session) handleAuth(args []string) error {
 
 	switch mechanism {
 	case "PLAIN":
-		return s.handleAuthPlain(args[1:])
+		return s.handleAuthPlain(ctx, args[1:])
 	case "LOGIN":
-		return s.handleAuthLogin(args[1:])
+		return s.handleAuthLogin(ctx, args[1:])
 	default:
 		return s.writeResponse(Response(StatusParamError, "Authentication mechanism not supported"))
 	}
 }
 
-func (s *Session) handleAuthPlain(args []string) error {
+func (s *Session) handleAuthPlain(ctx context.Context, args []string) error {
 	var credentials string
 
 	if len(args) > 0 {
@@ -241,10 +281,10 @@ func (s *Session) handleAuthPlain(args []string) error {
 		return s.writeResponse(Response(StatusAuthRequired, "Authentication failed"))
 	}
 
-	return s.authenticateUser(username, password)
+	return s.authenticateUser(ctx, username, password)
 }
 
-func (s *Session) handleAuthLogin(args []string) error {
+func (s *Session) handleAuthLogin(ctx context.Context, args []string) error {
 	if err := s.writeResponse("334 " + auth.EncodeBase64("Username:")); err != nil {
 		return err
 	}
@@ -283,14 +323,14 @@ func (s *Session) handleAuthLogin(args []string) error {
 		return s.writeResponse(Response(StatusAuthRequired, "Authentication failed"))
 	}
 
-	return s.authenticateUser(username, password)
+	return s.authenticateUser(ctx, username, password)
 }
 
-func (s *Session) authenticateUser(username, password string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+func (s *Session) authenticateUser(ctx context.Context, username, password string) error {
+	authCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	result := s.authenticator.Authenticate(ctx, username, password)
+	result := s.authenticator.Authenticate(authCtx, username, password)
 
 	if result.Success {
 		s.authenticated = true
@@ -304,15 +344,22 @@ func (s *Session) authenticateUser(username, password string) error {
 	return s.writeResponse(Response(StatusAuthRequired, "Authentication failed"))
 }
 
-func (s *Session) handleMail(args []string) error {
+func (s *Session) handleMail(ctx context.Context, args []string) error {
 	// Check session state
 	if s.state != StateGreeted && s.state != StateAuthenticated {
 		return s.writeResponse(Response(StatusBadSequence, "EHLO/HELO required before MAIL"))
 	}
 
-	// Reset session state for new mail transaction
-	s.mailFrom = ""
-	s.rcptTo = s.rcptTo[:0] // Clear recipients
+	// Initialize new message for this mail transaction
+	s.currentMessage = &queue.Message{
+		ClientIP:            s.clientIP,
+		ClientHelloHostname: s.clientHelloHostname,
+		LocalRecipients:     make(map[string]struct{}),
+		VirtualRecipients:   make(map[string]struct{}),
+		RelayRecipients:     make(map[string]struct{}),
+		ExternalRecipients:  make(map[string]struct{}),
+		Created:            time.Now().UTC(),
+	}
 
 	// Parse and validate the MAIL FROM command
 	emailAddr, err := s.emailValidator.ParseMailFromCommand(args)
@@ -321,15 +368,15 @@ func (s *Session) handleMail(args []string) error {
 		return s.writeResponse(Response(StatusParamError, err.Error()))
 	}
 
-	// Store the sender address
-	s.mailFrom = emailAddr.Full
+	// Store the sender address in message
+	s.currentMessage.From = emailAddr.Full
 	s.state = StateMailFrom
 
-	s.logger.Info("MAIL FROM accepted", "sender", s.mailFrom, "client_ip", s.clientIP)
+	s.logger.Info("MAIL FROM accepted", "sender", s.currentMessage.From, "client_ip", s.clientIP)
 	return s.writeResponse(Response(StatusOK, "Sender accepted"))
 }
 
-func (s *Session) handleRcpt(args []string) error {
+func (s *Session) handleRcpt(ctx context.Context, args []string) error {
 	// Check session state - MAIL FROM must be done first
 	if s.state != StateMailFrom && s.state != StateRcptTo {
 		return s.writeResponse(Response(StatusBadSequence, "MAIL FROM required before RCPT TO"))
@@ -337,7 +384,7 @@ func (s *Session) handleRcpt(args []string) error {
 
 	// Check recipient limit
 	maxRecipients := s.config.Server.MaxRecipients
-	if maxRecipients > 0 && len(s.rcptTo) >= maxRecipients {
+	if maxRecipients > 0 && s.currentMessage.TotalRecipients() >= maxRecipients {
 		return s.writeResponse(Response(StatusExceededStorage, "Too many recipients"))
 	}
 
@@ -348,29 +395,59 @@ func (s *Session) handleRcpt(args []string) error {
 		return s.writeResponse(Response(StatusParamError, err.Error()))
 	}
 
-	// Check for duplicate recipients
-	for _, existing := range s.rcptTo {
-		if existing == emailAddr.Full {
-			s.logger.Debug("Duplicate recipient ignored", "recipient", emailAddr.Full, "client_ip", s.clientIP)
+	// Classify domain type
+	domainType := s.classifyDomain(emailAddr.Domain)
+	
+	// Handle based on domain type
+	switch domainType {
+	case queue.RecipientLocal, queue.RecipientVirtual:
+		// Validate user exists using plugin chain
+		if !s.validateUserWithChain(ctx, emailAddr.Full) {
+			s.logger.Debug("User validation failed", "recipient", emailAddr.Full, "domain_type", domainType, "client_ip", s.clientIP)
+			return s.writeResponse(Response(StatusMailboxUnavailable, "User unknown"))
+		}
+		
+		// Check for duplicates and add to appropriate map
+		if domainType == queue.RecipientLocal {
+			if _, exists := s.currentMessage.LocalRecipients[emailAddr.Full]; exists {
+				s.logger.Debug("Duplicate recipient ignored", "recipient", emailAddr.Full, "domain_type", domainType, "client_ip", s.clientIP)
+				return s.writeResponse(Response(StatusOK, "Recipient accepted"))
+			}
+			s.currentMessage.LocalRecipients[emailAddr.Full] = struct{}{}
+		} else {
+			if _, exists := s.currentMessage.VirtualRecipients[emailAddr.Full]; exists {
+				s.logger.Debug("Duplicate recipient ignored", "recipient", emailAddr.Full, "domain_type", domainType, "client_ip", s.clientIP)
+				return s.writeResponse(Response(StatusOK, "Recipient accepted"))
+			}
+			s.currentMessage.VirtualRecipients[emailAddr.Full] = struct{}{}
+		}
+		
+	case queue.RecipientRelay:
+		// Check for duplicates in relay map
+		if _, exists := s.currentMessage.RelayRecipients[emailAddr.Full]; exists {
+			s.logger.Debug("Duplicate relay recipient ignored", "recipient", emailAddr.Full, "client_ip", s.clientIP)
 			return s.writeResponse(Response(StatusOK, "Recipient accepted"))
 		}
+		s.currentMessage.RelayRecipients[emailAddr.Full] = struct{}{}
+		
+	case queue.RecipientExternal:
+		s.logger.Debug("External domain not permitted", "recipient", emailAddr.Full, "domain", emailAddr.Domain, "client_ip", s.clientIP)
+		return s.writeResponse(Response(StatusTransactionFailed, "Relay not permitted"))
 	}
 
-	// Add recipient to list
-	s.rcptTo = append(s.rcptTo, emailAddr.Full)
 	s.state = StateRcptTo
 
-	s.logger.Info("RCPT TO accepted", "recipient", emailAddr.Full, "total_recipients", len(s.rcptTo), "client_ip", s.clientIP)
+	s.logger.Info("RCPT TO accepted", "recipient", emailAddr.Full, "domain_type", domainType, "total_recipients", s.currentMessage.TotalRecipients(), "client_ip", s.clientIP)
 	return s.writeResponse(Response(StatusOK, "Recipient accepted"))
 }
 
-func (s *Session) handleData(args []string) error {
+func (s *Session) handleData(ctx context.Context, args []string) error {
 	// Check session state - must have at least one recipient
 	if s.state != StateRcptTo {
 		return s.writeResponse(Response(StatusBadSequence, "RCPT TO required before DATA"))
 	}
 
-	if len(s.rcptTo) == 0 {
+	if s.currentMessage.TotalRecipients() == 0 {
 		return s.writeResponse(Response(StatusBadSequence, "No recipients specified"))
 	}
 
@@ -389,8 +466,8 @@ func (s *Session) handleData(args []string) error {
 
 	// TODO: Store message using Maildir storage system
 	s.logger.Info("Message received",
-		"sender", s.mailFrom,
-		"recipients", len(s.rcptTo),
+		"sender", s.currentMessage.From,
+		"total_recipients", s.currentMessage.TotalRecipients(),
 		"size", len(messageData),
 		"client_ip", s.clientIP)
 
@@ -400,16 +477,16 @@ func (s *Session) handleData(args []string) error {
 	return s.writeResponse(Response(StatusOK, "Message accepted for delivery"))
 }
 
-func (s *Session) handleRset(args []string) error {
+func (s *Session) handleRset(ctx context.Context, args []string) error {
 	s.resetSession()
 	return s.writeResponse(Response(StatusOK, "Reset state"))
 }
 
-func (s *Session) handleNoop(args []string) error {
+func (s *Session) handleNoop(ctx context.Context, args []string) error {
 	return s.writeResponse(Response(StatusOK, ""))
 }
 
-func (s *Session) handleQuit(args []string) error {
+func (s *Session) handleQuit(ctx context.Context, args []string) error {
 	s.state = StateClosed
 	return s.writeResponse(Response(StatusClosing, ""))
 }
@@ -421,8 +498,9 @@ func (s *Session) resetSession() {
 	} else {
 		s.state = StateGreeted
 	}
-	s.mailFrom = ""
-	s.rcptTo = s.rcptTo[:0] // Clear slice but keep capacity
+	
+	// Clear current message
+	s.currentMessage = nil
 }
 
 func (s *Session) readMessageData() ([]byte, error) {

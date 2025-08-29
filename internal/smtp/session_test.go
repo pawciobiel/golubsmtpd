@@ -25,14 +25,20 @@ func TestSMTPMailFlow(t *testing.T) {
 		},
 	}
 
-	// Create a mock authenticator
-	mockAuth, err := auth.NewMemoryAuthenticatorFromConfig(
-		context.Background(),
-		map[string]interface{}{
-			"users": []interface{}{
-				map[string]interface{}{"username": "testuser", "password": "testpass"},
+	// Create a mock authenticator using the new auth system
+	authConfig := &config.AuthConfig{
+		PluginChain: []string{"memory"},
+		Plugins: map[string]map[string]interface{}{
+			"memory": {
+				"users": []interface{}{
+					map[string]interface{}{"username": "testuser", "password": "testpass"},
+				},
 			},
 		},
+	}
+	mockAuth, err := auth.CreateAuthenticator(
+		context.Background(),
+		authConfig,
 		slog.New(slog.NewTextHandler(os.Stderr, nil)),
 	)
 	if err != nil {

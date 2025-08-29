@@ -123,6 +123,72 @@ func (f *FileAuthenticator) Authenticate(ctx context.Context, username, password
 	return &AuthResult{Success: false}
 }
 
+// findUserInFile is a common method for file parsing logic
+func (f *FileAuthenticator) findUserInFile(ctx context.Context, email string, needPassword bool) (string, bool) {
+	file, err := os.Open(f.filePath)
+	if err != nil {
+		f.logger.Error("Failed to open auth file", "error", err)
+		return "", false
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		select {
+		case <-ctx.Done():
+			return "", false
+		default:
+		}
+
+		line := strings.TrimSpace(scanner.Text())
+
+		// Skip empty lines and comments
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		// Parse username:password format
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+
+		fileUsername := strings.TrimSpace(parts[0])
+		filePassword := strings.TrimSpace(parts[1])
+
+		// Check if this is the user we're looking for
+		if fileUsername == email {
+			if needPassword {
+				return filePassword, true
+			}
+			return "", true // User found, password not needed
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		f.logger.Error("Error reading auth file", "error", err)
+		return "", false
+	}
+
+	return "", false // User not found
+}
+
+// ValidateUser checks if a user/email exists by streaming through the file
+func (f *FileAuthenticator) ValidateUser(ctx context.Context, email string) bool {
+	if email == "" {
+		return false
+	}
+
+	_, found := f.findUserInFile(ctx, email, false)
+	if found {
+		f.logger.Debug("User validation successful", "email", email, "plugin", "file")
+	} else {
+		f.logger.Debug("User validation failed: user not found", "email", email, "plugin", "file")
+	}
+	
+	return found
+}
+
 // Name returns the plugin name
 func (f *FileAuthenticator) Name() string {
 	return "file"

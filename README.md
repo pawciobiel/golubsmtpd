@@ -46,6 +46,7 @@ The server uses YAML configuration with support for:
 - **Security features**: rDNS lookup, DNSBL checking
 - **Connection limits**: Total and per-IP connection limits
 - **Unified queue**: Single queue with semaphore-based concurrency control and parallel delivery
+- **Per-type processing**: Configurable processing characteristics per recipient type (local, virtual, relay, external) to support different delivery requirements for chat emails, local fanout, and bulk campaigns
 
 ## Use Cases
 
@@ -59,7 +60,8 @@ golubsmtpd is designed to handle three primary use cases:
 
 ### Unified Queue System
 
-After evaluating multiple approaches (multi-tier queues, database-backed coordination, separate local/external queues), we chose a **unified single queue** design for optimal simplicity and performance.
+After evaluating multiple approaches (multi-tier queues, database-backed coordination, separate local/external queues), 
+I've chosen a **unified single queue** design for optimal simplicity and performance.
 
 ### Architecture Overview
 
@@ -80,23 +82,23 @@ Session Processing:                  │                        │ msg-003.eml 
 2. Message validation                                                  │
 3. Write to disk FIRST                                                 │
 4. Queue metadata THEN                                                 │
-                                                                      │
-Single Message Queue (Buffered Channel):                             │
-                                                                      ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                           Message Queue                                │
-│                        chan QueueItem (1000)                          │
-│                                                                         │
-│ QueueItem{                    QueueItem{                    QueueItem{  │
-│   MsgID: "001"                  MsgID: "002"                  MsgID: "003"│
-│   Recipients: [                 Recipients: [                Recipients: [│
-│     {user1@local, "local"},       {admin@ext, "external"},     {chat@local}│
-│     {user2@local, "local"},       {sales@ext, "external"}    ]           │
-│     {admin@ext, "external"}     ]                            Priority: 1 │
-│   ]                            Priority: 3                   }           │
-│   Priority: 2                  }                                         │
-│ }                                                                         │
-└─────────────────────────────────────────────────────────────────────────┘
+                                                                       │
+Single Message Queue (Buffered Channel):                               │
+                                                                       ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           Message Queue                                     │
+│                        chan QueueItem (1000)                                │
+│                                                                             │
+│ QueueItem{                    QueueItem{                    QueueItem{      │
+│   MsgID: "001"                  MsgID: "002"                  MsgID: "003"  │
+│   Recipients: [                 Recipients: [                Recipients: [  │
+│     {user1@local, "local"},       {admin@ext, "external"},     {chat@local} │
+│     {user2@local, "local"},       {sales@ext, "external"}    ]              │
+│     {admin@ext, "external"}     ]                            Priority: 1    │
+│   ]                            Priority: 3                   }              │
+│   Priority: 2                  }                                            │
+│ }                                                                           │
+└─────────────────────────────────────────────────────────────────────────────┘
                                        │
                          ┌─────────────┴─────────────┐
                          │      Queue Manager        │
@@ -108,16 +110,16 @@ Single Message Queue (Buffered Channel):                             │
                          │ • Handle backpressure     │
                          └─────────────┬─────────────┘
                                        │
-                         ┌─────────────▼─────────────┐
-                         │      Semaphore Control    │
-                         │     (50 concurrent)       │
-                         │                           │
-                         │ ████████████████░░░░░░░░  │ 32/50 slots used
-                         │                           │
-                         │ • Blocks when full        │
-                         │ • Auto-releases on done   │
+                         ┌─────────────▼──────────────┐
+                         │      Semaphore Control     │
+                         │     (50 concurrent)        │
+                         │                            │
+                         │ ████████████████░░░░░░░░   │ 32/50 slots used
+                         │                            │
+                         │ • Blocks when full         │
+                         │ • Auto-releases on done    │
                          │ • Failed processors restart│
-                         └─────────────┬─────────────┘
+                         └─────────────┬──────────────┘
                                        │
               ┌────────────────────────┼────────────────────────┐
               │                        │                        │
@@ -204,7 +206,61 @@ Single Message Queue (Buffered Channel):                             │
 - Efficient resource usage
 - Simple backpressure control
 
-#### 4. **Memory vs Performance Trade-offs**
+#### 4. **Message Granularity: Single vs Multiple Queue Items per SMTP Session**
+
+**Problem:** How to handle SMTP sessions with mixed recipient types (local + external)  
+**Options Evaluated:**
+- Multiple queue messages per session (split by recipient type)
+- Single queue message per session with sequential processing
+- Single queue message per session with internal parallelization
+
+**Decision: Single Message + Internal Parallelization**
+
+Each MessageProcessor handles one message but processes local and external delivery in completely separate goroutines within the same processor.
+
+**Benefits:**
+- **Complete isolation**: External failures don't affect local delivery
+- **Independent timeouts**: Local (30s) vs External (60s) processing limits
+- **Independent error handling**: Local success + external retry possible
+- **Concurrent processing**: Local + external happen simultaneously
+- **Simple session logic**: One SMTP session → one queue item
+- **Preserves message integrity**: Original sender context maintained
+- **Efficient memory usage**: Single message file, referenced once
+- **Scales to all use cases**: 1 recipient to 100K recipients
+
+**Trade-offs:**
+- **Complex internal coordination**: Requires goroutine synchronization and error aggregation
+- **Single processor ownership**: No load balancing across different MessageProcessors for one message
+- **Large metadata items**: 100K recipients still require substantial memory per queue item
+
+#### 5. **Recipient Classification Timing: Session vs Processing**
+
+**Problem:** When to classify recipients as local vs external domains  
+**Options Evaluated:**
+- Classification during SMTP session (RCPT TO processing)
+- Classification during message processing phase
+- Hybrid approach with domain-only classification in session
+
+**Decision: Session-Level Classification**
+
+Recipients are classified immediately during RCPT TO command processing, with real-time validation of local users.
+
+**Benefits:**
+- **RFC compliance**: Proper 550 "User unknown" errors returned immediately
+- **Early validation**: Invalid local users rejected during SMTP session
+- **Immediate feedback**: Clients get instant notification of recipient validity
+- **Memory efficiency**: Pre-classified recipient lists avoid processing overhead
+- **Session optimization**: Domain lookups happen once per recipient
+- **Industry standard**: Matches behavior of production SMTP servers
+
+**Trade-offs:**
+- **Session complexity**: More validation logic in SMTP handling code
+- **Potential blocking**: User validation could slow SMTP responses for large fanout
+- **Configuration coupling**: Session handling requires access to local domains and user data
+
+**Mitigation**: LRU cache for user validation to maintain performance during high-volume local fanout scenarios.
+
+#### 6. **Memory vs Performance Trade-offs**
 
 **Memory Usage (50 concurrent processors):**
 ```
@@ -328,21 +384,27 @@ queue:
 
 ## TODO
 
-### Core Features
-- Multi-tier OpenSMTPD-style queue system (hot/local/external)
-- Local delivery and Maildir storage implementation  
-- External mail relay with domain-based rate limiting
-- Smart message routing and classification
+### Core Implementation (Priority 1)
+- **Unified Queue System**: Implement MessageProcessor with semaphore-based concurrency
+- **Message Storage**: File lifecycle management (`incoming/` → `processing/` → `delivered/`)
+- **Local Delivery**: Maildir implementation with concurrent user writes and LRU cache
+- **External Relay**: SMTP client with domain-based rate limiting and connection pooling
 
-### Security & Performance
-- IPv6 support for DNSBL checking and connection handling
-- TLS/STARTTLS support
-- Fix readMessageData to check input size before allocating buffer (DoS protection)
-- Improve command handling security with input validation and rate limiting
-- Performance metrics and monitoring for queue tiers
+### Security & Performance (Priority 2)
+- **IPv6 Support**: DNSBL checking and connection handling for IPv6 addresses
+- **TLS/STARTTLS**: Secure connection support with certificate management
+- **DoS Protection**: Input size validation before buffer allocation in readMessageData
+- **Rate Limiting**: Command-level rate limiting and input validation improvements
+- **Monitoring**: Queue depth metrics, processing rates, and error tracking
 
-### Advanced Features  
-- Additional authentication methods (CRAM-MD5)
-- Hot-reload configuration
-- Queue persistence and recovery
-- Delivery status notifications (DSN)
+### Advanced Features (Priority 3)  
+- **Authentication**: Additional methods (CRAM-MD5) and plugin extensibility
+- **Configuration**: Hot-reload without service interruption
+- **Reliability**: Queue persistence, crash recovery, and graceful shutdown
+- **Compliance**: Delivery Status Notifications (DSN) and RFC compliance improvements
+
+### Performance Optimizations (Priority 4)
+- **Memory**: sync.Pool for QueueItem reuse and streaming for large recipient lists
+- **I/O**: Batch Maildir writes and connection pooling optimizations
+- **Scaling**: Dynamic semaphore sizing and memory pressure monitoring
+- **Benchmarking**: Performance tests for all three use cases (chat, fanout, relay)

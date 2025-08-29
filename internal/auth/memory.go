@@ -80,6 +80,23 @@ func (m *MemoryAuthenticator) Authenticate(ctx context.Context, username, passwo
 	return &AuthResult{Success: false}
 }
 
+// ValidateUser checks if a user/email exists for RCPT TO validation
+func (m *MemoryAuthenticator) ValidateUser(ctx context.Context, email string) bool {
+	if email == "" {
+		return false
+	}
+
+	// Direct lookup using full email as username
+	_, exists := m.users[email]
+	if exists {
+		m.logger.Debug("User validation successful", "email", email, "plugin", "memory")
+	} else {
+		m.logger.Debug("User validation failed: user not found", "email", email, "plugin", "memory")
+	}
+	
+	return exists
+}
+
 // Name returns the plugin name
 func (m *MemoryAuthenticator) Name() string {
 	return "memory"

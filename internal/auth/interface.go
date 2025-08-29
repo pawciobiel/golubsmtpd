@@ -11,8 +11,11 @@ type AuthResult struct {
 
 // Authenticator defines the interface for authentication plugins
 type Authenticator interface {
-	// Authenticate verifies username and password
+	// Authenticate verifies username and password for SMTP AUTH
 	Authenticate(ctx context.Context, username, password string) *AuthResult
+
+	// ValidateUser checks if a user/email exists for RCPT TO validation
+	ValidateUser(ctx context.Context, email string) bool
 
 	// Name returns the plugin name
 	Name() string
