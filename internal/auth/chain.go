@@ -10,7 +10,6 @@ import (
 	"github.com/pawciobiel/golubsmtpd/internal/config"
 )
 
-
 // AuthChain implements authentication using a chain of plugins
 type AuthChain struct {
 	plugins      []Authenticator
@@ -104,29 +103,29 @@ func (c *AuthChain) Authenticate(ctx context.Context, username, password string)
 		default:
 		}
 
-		c.logger.Debug("Attempting authentication", 
-			"username", username, 
+		c.logger.Debug("Attempting authentication",
+			"username", username,
 			"plugin", plugin.Name())
 
 		result := plugin.Authenticate(ctx, username, password)
-		
+
 		if result.Success {
 			atomic.AddInt64(&c.successCount, 1)
-			c.logger.Info("Authentication successful", 
-				"username", username, 
+			c.logger.Info("Authentication successful",
+				"username", username,
 				"plugin", plugin.Name())
 			return result
 		}
 
 		// Log failure but continue to next plugin
 		if result.Error != nil {
-			c.logger.Debug("Authentication plugin error", 
-				"username", username, 
-				"plugin", plugin.Name(), 
+			c.logger.Debug("Authentication plugin error",
+				"username", username,
+				"plugin", plugin.Name(),
 				"error", result.Error)
 		} else {
-			c.logger.Debug("Authentication failed", 
-				"username", username, 
+			c.logger.Debug("Authentication failed",
+				"username", username,
 				"plugin", plugin.Name())
 		}
 	}
@@ -150,19 +149,19 @@ func (c *AuthChain) ValidateUser(ctx context.Context, email string) bool {
 		default:
 		}
 
-		c.logger.Debug("Attempting user validation", 
-			"email", email, 
+		c.logger.Debug("Attempting user validation",
+			"email", email,
 			"plugin", plugin.Name())
 
 		if plugin.ValidateUser(ctx, email) {
-			c.logger.Debug("User validation successful", 
-				"email", email, 
+			c.logger.Debug("User validation successful",
+				"email", email,
 				"plugin", plugin.Name())
 			return true
 		}
 
-		c.logger.Debug("User validation failed", 
-			"email", email, 
+		c.logger.Debug("User validation failed",
+			"email", email,
 			"plugin", plugin.Name())
 	}
 
@@ -176,7 +175,7 @@ func (c *AuthChain) Name() string {
 	for i, plugin := range c.plugins {
 		names[i] = plugin.Name()
 	}
-	
+
 	return fmt.Sprintf("chain[%s]", strings.Join(names, ","))
 }
 
@@ -184,8 +183,8 @@ func (c *AuthChain) Name() string {
 func (c *AuthChain) Close() error {
 	for _, plugin := range c.plugins {
 		if err := plugin.Close(); err != nil {
-			c.logger.Error("Error closing auth plugin", 
-				"plugin", plugin.Name(), 
+			c.logger.Error("Error closing auth plugin",
+				"plugin", plugin.Name(),
 				"error", err)
 		}
 	}

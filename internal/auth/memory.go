@@ -93,7 +93,7 @@ func (m *MemoryAuthenticator) ValidateUser(ctx context.Context, email string) bo
 	} else {
 		m.logger.Debug("User validation failed: user not found", "email", email, "plugin", "memory")
 	}
-	
+
 	return exists
 }
 

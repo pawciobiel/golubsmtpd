@@ -13,6 +13,7 @@ import (
 	"github.com/pawciobiel/golubsmtpd/internal/config"
 	"github.com/pawciobiel/golubsmtpd/internal/logging"
 	"github.com/pawciobiel/golubsmtpd/internal/server"
+	"github.com/pawciobiel/golubsmtpd/internal/storage"
 )
 
 func main() {
@@ -24,6 +25,11 @@ func main() {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		log.Fatal("Failed to load configuration:", err)
+	}
+
+	// Initialize spool directories
+	if err := storage.InitializeSpoolDirectories(cfg.Server.SpoolDir); err != nil {
+		log.Fatal("Failed to initialize spool directories:", err)
 	}
 
 	// Setup logging

@@ -185,7 +185,7 @@ func (f *FileAuthenticator) ValidateUser(ctx context.Context, email string) bool
 	} else {
 		f.logger.Debug("User validation failed: user not found", "email", email, "plugin", "file")
 	}
-	
+
 	return found
 }
 

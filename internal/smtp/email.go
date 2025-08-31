@@ -276,7 +276,7 @@ func ValidateHelloHostname(hostname string) error {
 
 	// Basic hostname validation regex
 	hostnameRegex := regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$`)
-	
+
 	if !hostnameRegex.MatchString(hostname) {
 		return fmt.Errorf("invalid hostname format")
 	}

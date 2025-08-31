@@ -9,6 +9,7 @@ type Config struct {
 	Auth     AuthConfig     `yaml:"auth"`
 	Security SecurityConfig `yaml:"security"`
 	Logging  LoggingConfig  `yaml:"logging"`
+	Queue    QueueConfig    `yaml:"queue"`
 }
 
 type ServerConfig struct {
@@ -66,6 +67,11 @@ type LoggingConfig struct {
 	Format string `yaml:"format"`
 }
 
+type QueueConfig struct {
+	BufferSize   int `yaml:"buffer_size"`
+	MaxConsumers int `yaml:"max_consumers"`
+}
+
 type UserConfig struct {
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
@@ -79,14 +85,14 @@ func DefaultConfig() *Config {
 			Hostname:            "localhost",
 			MaxConnections:      10000,
 			MaxConnectionsPerIP: 1000,
-			MaxRecipients:       1000, // RFC 5321 recommends 1000+ for production
+			MaxRecipients:       1000,             // RFC 5321 recommends 1000+ for production
 			MaxMessageSize:      10 * 1024 * 1024, // 10MB
 			ReadTimeout:         30 * time.Second,
 			WriteTimeout:        30 * time.Second,
 			EmailValidation:     []string{"basic"},
-			LocalDomains:        []string{"localhost"}, // System users
+			LocalDomains:        []string{"localhost"},      // System users
 			VirtualDomains:      []string{"mail.localhost"}, // Virtual users
-			RelayDomains:        []string{}, // No relay by default
+			RelayDomains:        []string{},                 // No relay by default
 			SpoolDir:            "/var/spool/golubsmtpd",
 		},
 		TLS: TLSConfig{
@@ -119,6 +125,10 @@ func DefaultConfig() *Config {
 		Logging: LoggingConfig{
 			Level:  "info",
 			Format: "text",
+		},
+		Queue: QueueConfig{
+			BufferSize:   1000,
+			MaxConsumers: 10,
 		},
 	}
 }

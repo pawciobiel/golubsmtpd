@@ -21,18 +21,18 @@ const (
 	StatusInsufficientStorage = 452
 
 	// Permanent negative completion replies (5xx)
-	StatusSyntaxError       = 500
-	StatusParamError        = 501
-	StatusCommandNotImpl    = 502
-	StatusBadSequence       = 503
-	StatusParamNotImpl      = 504
-	StatusNotAuthorized     = 530
-	StatusAuthRequired      = 535
+	StatusSyntaxError        = 500
+	StatusParamError         = 501
+	StatusCommandNotImpl     = 502
+	StatusBadSequence        = 503
+	StatusParamNotImpl       = 504
+	StatusNotAuthorized      = 530
+	StatusAuthRequired       = 535
 	StatusMailboxUnavailable = 550
-	StatusUserNotLocal      = 551
-	StatusExceededStorage   = 552
-	StatusMailboxName       = 553
-	StatusTransactionFailed = 554
+	StatusUserNotLocal       = 551
+	StatusExceededStorage    = 552
+	StatusMailboxName        = 553
+	StatusTransactionFailed  = 554
 )
 
 // Standard SMTP response messages

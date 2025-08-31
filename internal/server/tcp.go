@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/textproto"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/pawciobiel/golubsmtpd/internal/auth"
 	"github.com/pawciobiel/golubsmtpd/internal/config"
+	"github.com/pawciobiel/golubsmtpd/internal/queue"
 	"github.com/pawciobiel/golubsmtpd/internal/security"
 	"github.com/pawciobiel/golubsmtpd/internal/smtp"
 )
@@ -32,6 +35,9 @@ type Server struct {
 	// Authentication
 	authenticator auth.Authenticator
 
+	// Message queue
+	queue *queue.Queue
+
 	// Lock-free connection tracking
 	totalConnections int64    // atomic counter
 	ipConnections    sync.Map // map[string]*int64 - IP -> connection count
@@ -48,66 +54,78 @@ func New(cfg *config.Config, logger *slog.Logger, authenticator auth.Authenticat
 	}
 }
 
-func (s *Server) Start(ctx context.Context) error {
-	addr := fmt.Sprintf("%s:%d", s.config.Server.Bind, s.config.Server.Port)
+func (srv *Server) Start(ctx context.Context) error {
+	addr := fmt.Sprintf("%s:%d", srv.config.Server.Bind, srv.config.Server.Port)
 
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("failed to listen on %s: %w", addr, err)
 	}
 
-	s.listener = listener
-	s.logger.Info("SMTP server started", "address", addr)
+	srv.listener = listener
+
+	// Initialize and start message queue
+	srv.queue = queue.NewQueue(ctx, srv.config.Queue.BufferSize, srv.config.Queue.MaxConsumers, srv.logger)
+	srv.queue.StartConsumers(ctx)
+
+	srv.logger.Info("SMTP server started", "address", addr)
 
 	// Start accepting connections
-	s.wg.Add(1)
-	go s.acceptLoop(ctx)
+	srv.wg.Add(1)
+	go srv.acceptLoop(ctx)
 
 	return nil
 }
 
-func (s *Server) Stop(ctx context.Context) error {
-	s.logger.Info("Shutting down SMTP server")
-	close(s.shutdown)
+func (srv *Server) Stop(ctx context.Context) error {
+	srv.logger.Info("Shutting down SMTP server")
+	close(srv.shutdown)
 
-	if s.listener != nil {
-		s.listener.Close()
+	if srv.listener != nil {
+		srv.listener.Close()
+	}
+
+	// Stop message queue first
+	if srv.queue != nil {
+		if err := srv.queue.Stop(ctx); err != nil {
+			srv.logger.Error("Error stopping message queue", "error", err)
+		}
 	}
 
 	// Wait for all goroutines to finish with timeout
 	done := make(chan struct{})
 	go func() {
-		s.wg.Wait()
+		srv.wg.Wait()
 		close(done)
 	}()
 
 	select {
 	case <-done:
-		s.logger.Info("SMTP server stopped gracefully")
+		srv.logger.Info("SMTP server stopped gracefully")
 		return nil
 	case <-ctx.Done():
-		s.logger.Warn("SMTP server shutdown timeout")
+		srv.logger.Warn("SMTP server shutdown timeout")
 		return ctx.Err()
 	}
 }
 
-func (s *Server) acceptLoop(ctx context.Context) {
-	defer s.wg.Done()
+func (srv *Server) acceptLoop(ctx context.Context) {
+	defer srv.wg.Done()
 
 	for {
 		select {
-		case <-s.shutdown:
+		case <-srv.shutdown:
 			return
 		default:
 		}
 
-		conn, err := s.listener.Accept()
+		conn, err := srv.listener.Accept()
 		if err != nil {
 			select {
-			case <-s.shutdown:
+			case <-srv.shutdown:
 				return
 			default:
-				s.logger.Error("Failed to accept connection", "error", err)
+				srv.logger.Error("Failed to accept connection", "error", err)
 				continue
 			}
 		}
@@ -115,92 +133,92 @@ func (s *Server) acceptLoop(ctx context.Context) {
 		clientIP := getClientIP(conn)
 
 		// Check limits BEFORE spawning goroutine
-		if !s.canAcceptConnection(clientIP) {
+		if !srv.canAcceptConnection(clientIP) {
 			conn.Close()
 			continue
 		}
 
 		// Track connection
-		s.trackConnection(clientIP)
+		srv.trackConnection(clientIP)
 
-		s.wg.Add(1)
-		go s.handleConnection(ctx, conn, clientIP)
+		srv.wg.Add(1)
+		go srv.handleConnection(ctx, conn, clientIP)
 	}
 }
 
-func (s *Server) canAcceptConnection(clientIP string) bool {
+func (srv *Server) canAcceptConnection(clientIP string) bool {
 	// Reject connections with invalid IP addresses
 	if clientIP == UnknownClientIP {
-		s.logger.Warn("Connection rejected: unable to determine client IP")
+		srv.logger.Warn("Connection rejected: unable to determine client IP")
 		return false
 	}
 
 	// Check total connection limit (atomic read)
-	totalConns := atomic.LoadInt64(&s.totalConnections)
-	if totalConns >= int64(s.config.Server.MaxConnections) {
-		s.logger.Warn("Connection rejected: max connections reached",
-			"current", totalConns, "max", s.config.Server.MaxConnections)
+	totalConns := atomic.LoadInt64(&srv.totalConnections)
+	if totalConns >= int64(srv.config.Server.MaxConnections) {
+		srv.logger.Warn("Connection rejected: max connections reached",
+			"current", totalConns, "max", srv.config.Server.MaxConnections)
 		return false
 	}
 
 	// Check per-IP connection limit (sync.Map)
-	ipConns := s.getIPConnectionCount(clientIP)
-	if ipConns >= s.config.Server.MaxConnectionsPerIP {
-		s.logger.Warn("Connection rejected: max connections per IP reached",
-			"ip", clientIP, "current", ipConns, "max", s.config.Server.MaxConnectionsPerIP)
+	ipConns := srv.getIPConnectionCount(clientIP)
+	if ipConns >= srv.config.Server.MaxConnectionsPerIP {
+		srv.logger.Warn("Connection rejected: max connections per IP reached",
+			"ip", clientIP, "current", ipConns, "max", srv.config.Server.MaxConnectionsPerIP)
 		return false
 	}
 
 	return true
 }
 
-func (s *Server) trackConnection(clientIP string) {
-	atomic.AddInt64(&s.totalConnections, 1)
-	s.incrementIPConnection(clientIP)
+func (srv *Server) trackConnection(clientIP string) {
+	atomic.AddInt64(&srv.totalConnections, 1)
+	srv.incrementIPConnection(clientIP)
 }
 
-func (s *Server) untrackConnection(clientIP string) {
-	atomic.AddInt64(&s.totalConnections, -1)
-	s.decrementIPConnection(clientIP)
+func (srv *Server) untrackConnection(clientIP string) {
+	atomic.AddInt64(&srv.totalConnections, -1)
+	srv.decrementIPConnection(clientIP)
 }
 
-func (s *Server) getIPConnectionCount(ip string) int {
-	if val, ok := s.ipConnections.Load(ip); ok {
+func (srv *Server) getIPConnectionCount(ip string) int {
+	if val, ok := srv.ipConnections.Load(ip); ok {
 		return int(atomic.LoadInt64(val.(*int64)))
 	}
 	return 0
 }
 
-func (s *Server) incrementIPConnection(ip string) {
+func (srv *Server) incrementIPConnection(ip string) {
 	// Load or create counter for this IP
-	val, _ := s.ipConnections.LoadOrStore(ip, new(int64))
+	val, _ := srv.ipConnections.LoadOrStore(ip, new(int64))
 	atomic.AddInt64(val.(*int64), 1)
 }
 
-func (s *Server) decrementIPConnection(ip string) {
-	if val, ok := s.ipConnections.Load(ip); ok {
+func (srv *Server) decrementIPConnection(ip string) {
+	if val, ok := srv.ipConnections.Load(ip); ok {
 		newCount := atomic.AddInt64(val.(*int64), -1)
 		// Clean up if count reaches zero
 		if newCount <= 0 {
-			s.ipConnections.Delete(ip)
+			srv.ipConnections.Delete(ip)
 		}
 	}
 }
 
-func (s *Server) performSecurityChecks(ctx context.Context, clientIP string) bool {
-	rdnsResult := s.rdnsChecker.Lookup(ctx, clientIP)
+func (srv *Server) performSecurityChecks(ctx context.Context, clientIP string) bool {
+	rdnsResult := srv.rdnsChecker.Lookup(ctx, clientIP)
 	if !rdnsResult.Valid {
-		s.logger.Warn("rDNS check failed",
+		srv.logger.Warn("rDNS check failed",
 			"client_ip", clientIP,
 			"hostname", rdnsResult.Hostname,
 			"error", rdnsResult.Error)
 		return false
 	}
 
-	dnsblResults := s.dnsblChecker.CheckIP(ctx, clientIP)
+	dnsblResults := srv.dnsblChecker.CheckIP(ctx, clientIP)
 	for _, result := range dnsblResults {
-		if result.Listed && s.dnsblChecker.ShouldReject() {
-			s.logger.Warn("IP listed in DNSBL, rejecting connection",
+		if result.Listed && srv.dnsblChecker.ShouldReject() {
+			srv.logger.Warn("IP listed in DNSBL, rejecting connection",
 				"client_ip", clientIP,
 				"provider", result.Provider,
 				"response_codes", result.ResponseCodes)
@@ -211,23 +229,32 @@ func (s *Server) performSecurityChecks(ctx context.Context, clientIP string) boo
 	return true
 }
 
-func (s *Server) handleConnection(ctx context.Context, conn net.Conn, clientIP string) {
-	defer s.wg.Done()
-	defer s.untrackConnection(clientIP)
+func (srv *Server) handleConnection(ctx context.Context, conn net.Conn, clientIP string) {
+	defer srv.wg.Done()
+	defer srv.untrackConnection(clientIP)
 	defer conn.Close()
 
-	s.logger.Info("New connection accepted", "client_ip", clientIP)
+	srv.logger.Info("New connection accepted", "client_ip", clientIP)
 
-	if !s.performSecurityChecks(ctx, clientIP) {
-		s.logger.Warn("Connection rejected due to security checks", "client_ip", clientIP)
+	if !srv.performSecurityChecks(ctx, clientIP) {
+		srv.logger.Warn("Connection rejected due to security checks", "client_ip", clientIP)
 		return
 	}
 
-	session := smtp.NewSession(s.config, s.logger, conn, clientIP, s.authenticator)
+	// Set connection timeouts
+	if srv.config.Server.ReadTimeout > 0 {
+		conn.SetReadDeadline(time.Now().Add(srv.config.Server.ReadTimeout))
+	}
+	if srv.config.Server.WriteTimeout > 0 {
+		conn.SetWriteDeadline(time.Now().Add(srv.config.Server.WriteTimeout))
+	}
+
+	textprotoConn := textproto.NewConn(conn)
+	session := smtp.NewSession(srv.config, srv.logger, textprotoConn, clientIP, srv.authenticator, srv.queue)
 	if err := session.Handle(ctx); err != nil {
-		s.logger.Debug("SMTP session ended", "client_ip", clientIP, "error", err)
+		srv.logger.Debug("SMTP session ended", "client_ip", clientIP, "error", err)
 	} else {
-		s.logger.Debug("SMTP session completed successfully", "client_ip", clientIP)
+		srv.logger.Debug("SMTP session completed successfully", "client_ip", clientIP)
 	}
 }
 
