@@ -7,12 +7,23 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/pawciobiel/golubsmtpd/internal/config"
 )
 
 func createTestLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelError, // Only show errors to keep test output clean
 	}))
+}
+
+func createQueueTestConfig() *config.Config {
+	return &config.Config{
+		Queue: config.QueueConfig{
+			BufferSize:   10,
+			MaxConsumers: 2,
+		},
+	}
 }
 
 func createTestMessage() *Message {
@@ -32,7 +43,8 @@ func TestQueue_BasicPublishAndConsume(t *testing.T) {
 	defer cancel()
 
 	logger := createTestLogger()
-	queue := NewQueue(ctx, 10, 2, logger)
+	cfg := createQueueTestConfig()
+	queue := NewQueue(ctx, cfg, logger)
 
 	// Start consumers
 	queue.StartConsumers(ctx)
@@ -60,7 +72,8 @@ func TestQueue_PublishToFullQueue(t *testing.T) {
 
 	logger := createTestLogger()
 	// Create queue with buffer size 1 and no consumers
-	queue := NewQueue(ctx, 1, 1, logger)
+	cfg := &config.Config{Queue: config.QueueConfig{BufferSize: 1, MaxConsumers: 1}}
+	queue := NewQueue(ctx, cfg, logger)
 
 	// Publish first message (should succeed)
 	msg1 := createTestMessage()
@@ -82,7 +95,8 @@ func TestQueue_PublishAfterStop(t *testing.T) {
 	defer cancel()
 
 	logger := createTestLogger()
-	queue := NewQueue(ctx, 10, 1, logger)
+	cfg := &config.Config{Queue: config.QueueConfig{BufferSize: 10, MaxConsumers: 1}}
+	queue := NewQueue(ctx, cfg, logger)
 
 	// Start and immediately stop
 	queue.StartConsumers(ctx)
@@ -104,7 +118,8 @@ func TestQueue_ConcurrentPublishing(t *testing.T) {
 	defer cancel()
 
 	logger := createTestLogger()
-	queue := NewQueue(ctx, 100, 5, logger)
+	cfg := &config.Config{Queue: config.QueueConfig{BufferSize: 100, MaxConsumers: 5}}
+	queue := NewQueue(ctx, cfg, logger)
 
 	queue.StartConsumers(ctx)
 	defer queue.Stop(ctx)
@@ -158,7 +173,8 @@ func TestQueue_SemaphoreLimit(t *testing.T) {
 
 	logger := createTestLogger()
 	// Queue with buffer=10 but only 1 consumer (semaphore limit)
-	queue := NewQueue(ctx, 10, 1, logger)
+	cfg := &config.Config{Queue: config.QueueConfig{BufferSize: 10, MaxConsumers: 1}}
+	queue := NewQueue(ctx, cfg, logger)
 
 	queue.StartConsumers(ctx)
 	defer queue.Stop(ctx)
@@ -184,7 +200,8 @@ func TestQueue_GracefulShutdown(t *testing.T) {
 	defer cancel()
 
 	logger := createTestLogger()
-	queue := NewQueue(ctx, 5, 2, logger)
+	cfg := &config.Config{Queue: config.QueueConfig{BufferSize: 5, MaxConsumers: 2}}
+	queue := NewQueue(ctx, cfg, logger)
 
 	queue.StartConsumers(ctx)
 
@@ -215,7 +232,8 @@ func TestQueue_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	logger := createTestLogger()
-	queue := NewQueue(ctx, 5, 1, logger)
+	cfg := &config.Config{Queue: config.QueueConfig{BufferSize: 5, MaxConsumers: 1}}
+	queue := NewQueue(ctx, cfg, logger)
 
 	queue.StartConsumers(ctx)
 
@@ -241,7 +259,8 @@ func TestNewQueue(t *testing.T) {
 	ctx := context.Background()
 	logger := createTestLogger()
 
-	queue := NewQueue(ctx, 50, 3, logger)
+	cfg := &config.Config{Queue: config.QueueConfig{BufferSize: 50, MaxConsumers: 3}}
+	queue := NewQueue(ctx, cfg, logger)
 	if queue == nil {
 		t.Fatal("NewQueue returned nil")
 	}

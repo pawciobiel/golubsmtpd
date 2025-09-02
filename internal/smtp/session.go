@@ -10,6 +10,7 @@ import (
 
 	"github.com/pawciobiel/golubsmtpd/internal/auth"
 	"github.com/pawciobiel/golubsmtpd/internal/config"
+	"github.com/pawciobiel/golubsmtpd/internal/delivery"
 	"github.com/pawciobiel/golubsmtpd/internal/queue"
 )
 
@@ -77,17 +78,17 @@ func containsDomain(domains []string, domain string) bool {
 }
 
 // classifyDomain determines the domain type for recipient classification
-func (sess *Session) classifyDomain(domain string) queue.RecipientType {
+func (sess *Session) classifyDomain(domain string) delivery.RecipientType {
 	if containsDomain(sess.config.Server.LocalDomains, domain) {
-		return queue.RecipientLocal
+		return delivery.RecipientLocal
 	}
 	if containsDomain(sess.config.Server.VirtualDomains, domain) {
-		return queue.RecipientVirtual
+		return delivery.RecipientVirtual
 	}
 	if containsDomain(sess.config.Server.RelayDomains, domain) {
-		return queue.RecipientRelay
+		return delivery.RecipientRelay
 	}
-	return queue.RecipientExternal
+	return delivery.RecipientExternal
 }
 
 // validateUserWithChain tries authentication plugins in chain order
@@ -402,7 +403,7 @@ func (sess *Session) handleRcpt(ctx context.Context, args []string) error {
 
 	// Handle based on domain type
 	switch domainType {
-	case queue.RecipientLocal, queue.RecipientVirtual:
+	case delivery.RecipientLocal, delivery.RecipientVirtual:
 		// Validate user exists using plugin chain
 		if !sess.validateUserWithChain(ctx, emailAddr.Full) {
 			sess.logger.Debug("User validation failed", "recipient", emailAddr.Full, "domain_type", domainType, "client_ip", sess.clientIP)
@@ -410,7 +411,7 @@ func (sess *Session) handleRcpt(ctx context.Context, args []string) error {
 		}
 
 		// Check for duplicates and add to appropriate map
-		if domainType == queue.RecipientLocal {
+		if domainType == delivery.RecipientLocal {
 			if _, exists := sess.currentMessage.LocalRecipients[emailAddr.Full]; exists {
 				sess.logger.Debug("Duplicate recipient ignored", "recipient", emailAddr.Full, "domain_type", domainType, "client_ip", sess.clientIP)
 				return sess.writeResponse(Response(StatusOK, "Recipient accepted"))
@@ -424,7 +425,7 @@ func (sess *Session) handleRcpt(ctx context.Context, args []string) error {
 			sess.currentMessage.VirtualRecipients[emailAddr.Full] = struct{}{}
 		}
 
-	case queue.RecipientRelay:
+	case delivery.RecipientRelay:
 		// Check for duplicates in relay map
 		if _, exists := sess.currentMessage.RelayRecipients[emailAddr.Full]; exists {
 			sess.logger.Debug("Duplicate relay recipient ignored", "recipient", emailAddr.Full, "client_ip", sess.clientIP)
@@ -432,7 +433,7 @@ func (sess *Session) handleRcpt(ctx context.Context, args []string) error {
 		}
 		sess.currentMessage.RelayRecipients[emailAddr.Full] = struct{}{}
 
-	case queue.RecipientExternal:
+	case delivery.RecipientExternal:
 		sess.logger.Debug("External domain not permitted", "recipient", emailAddr.Full, "domain", emailAddr.Domain, "client_ip", sess.clientIP)
 		return sess.writeResponse(Response(StatusTransactionFailed, "Relay not permitted"))
 	}

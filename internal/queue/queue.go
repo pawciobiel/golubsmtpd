@@ -6,6 +6,9 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/pawciobiel/golubsmtpd/internal/config"
+	"github.com/pawciobiel/golubsmtpd/internal/delivery"
 )
 
 var (
@@ -16,6 +19,7 @@ var (
 type Queue struct {
 	messageQueue chan *Message
 	logger       *slog.Logger
+	config       *config.Config
 	sem          chan struct{} // Limits concurrent processors
 	processorWg  sync.WaitGroup
 
@@ -25,13 +29,14 @@ type Queue struct {
 	publisherWg     sync.WaitGroup     // Track active publishers
 }
 
-func NewQueue(ctx context.Context, bufferSize, maxProcessors int, logger *slog.Logger) *Queue {
+func NewQueue(ctx context.Context, config *config.Config, logger *slog.Logger) *Queue {
 	publisherCtx, cancel := context.WithCancel(ctx) // cancel is a function
 
 	return &Queue{
-		messageQueue:    make(chan *Message, bufferSize),
+		messageQueue:    make(chan *Message, config.Queue.BufferSize),
 		logger:          logger,
-		sem:             make(chan struct{}, maxProcessors),
+		config:          config,
+		sem:             make(chan struct{}, config.Queue.MaxConsumers),
 		publisherCtx:    publisherCtx,
 		publisherCancel: cancel, // Store the cancel function
 	}
@@ -178,6 +183,101 @@ func (q *Queue) Stop(ctx context.Context) error {
 
 func (q *Queue) processMessage(ctx context.Context, msg *Message) {
 	q.logger.Debug("Processing message", "message_id", msg.ID)
-	// TODO: Implement actual message processing logic
-	q.logger.Debug("Message processing completed", "message_id", msg.ID)
+
+	// Move message from incoming to processing
+	spoolDir := q.config.Server.SpoolDir
+	if err := MoveMessage(spoolDir, msg, MessageStateIncoming, MessageStateProcessing); err != nil {
+		q.logger.Error("Failed to move message to processing", "message_id", msg.ID, "error", err)
+		return
+	}
+
+	// Get message file path for delivery
+	messagePath := GetMessagePath(spoolDir, msg, MessageStateProcessing)
+
+	// TODO: Categorize recipients by domain type (local, virtual, relay)
+	// For now, deliver to all recipients as configured types
+	localRecipients := msg.LocalRecipients
+	virtualRecipients := msg.VirtualRecipients
+
+	// Calculate number of delivery types
+	deliveryTypes := 0
+	if len(localRecipients) > 0 {
+		deliveryTypes++
+	}
+	if len(virtualRecipients) > 0 {
+		deliveryTypes++
+	}
+
+	// Channel to collect delivery results
+	resultChan := make(chan delivery.DeliveryResult, deliveryTypes)
+
+	// Parallel delivery for local recipients using DeliverWithWorkers
+	if len(localRecipients) > 0 {
+		go func() {
+			maxWorkers := delivery.GetMaxWorkers(q.config.Delivery.Local.MaxWorkers, len(localRecipients))
+			result := delivery.DeliverWithWorkers(ctx, localRecipients, maxWorkers, delivery.RecipientLocal,
+				func(ctx context.Context, recipient string) bool {
+					return delivery.DeliverToLocalUser(ctx, messagePath, recipient)
+				})
+			resultChan <- result
+		}()
+	}
+
+	// Parallel delivery for virtual recipients using DeliverWithWorkers
+	if len(virtualRecipients) > 0 {
+		go func() {
+			maxWorkers := delivery.GetMaxWorkers(q.config.Delivery.Local.MaxWorkers, len(virtualRecipients))
+			result := delivery.DeliverWithWorkers(ctx, virtualRecipients, maxWorkers, delivery.RecipientVirtual,
+				func(ctx context.Context, recipient string) bool {
+					return delivery.DeliverToVirtualUser(ctx, messagePath, recipient, q.config.Delivery.VirtualMaildirPath)
+				})
+			resultChan <- result
+		}()
+	}
+
+	// Collect exactly the number of results we expect
+	var deliveryResults []delivery.DeliveryResult
+	for i := 0; i < deliveryTypes; i++ {
+		result := <-resultChan
+		deliveryResults = append(deliveryResults, result)
+	}
+
+	// Process delivery results and determine final message state
+	totalSuccessful := 0
+	totalFailed := 0
+	for _, result := range deliveryResults {
+		totalSuccessful += len(result.Successful)
+		totalFailed += len(result.Failed)
+
+		// Log delivery results
+		if len(result.Successful) > 0 {
+			q.logger.Info("Delivery successful", "message_id", msg.ID, "type", result.Type,
+				"successful_count", len(result.Successful), "recipients", result.Successful)
+		}
+		if len(result.Failed) > 0 {
+			q.logger.Warn("Delivery failed", "message_id", msg.ID, "type", result.Type,
+				"failed_count", len(result.Failed), "recipients", result.Failed)
+		}
+	}
+
+	// Move to final state based on delivery results
+	var finalState MessageState
+	if totalFailed == 0 {
+		finalState = MessageStateDelivered
+		q.logger.Info("Message delivery completed successfully", "message_id", msg.ID,
+			"successful_count", totalSuccessful)
+	} else {
+		finalState = MessageStateFailed
+		q.logger.Error("Message delivery failed", "message_id", msg.ID,
+			"successful_count", totalSuccessful, "failed_count", totalFailed)
+	}
+
+	// Move message to final state
+	if err := MoveMessage(spoolDir, msg, MessageStateProcessing, finalState); err != nil {
+		q.logger.Error("Failed to move message to final state", "message_id", msg.ID,
+			"final_state", finalState, "error", err)
+		return
+	}
+
+	q.logger.Debug("Message processing completed", "message_id", msg.ID, "final_state", finalState)
 }

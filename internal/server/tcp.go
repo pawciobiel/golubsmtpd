@@ -65,7 +65,7 @@ func (srv *Server) Start(ctx context.Context) error {
 	srv.listener = listener
 
 	// Initialize and start message queue
-	srv.queue = queue.NewQueue(ctx, srv.config.Queue.BufferSize, srv.config.Queue.MaxConsumers, srv.logger)
+	srv.queue = queue.NewQueue(ctx, srv.config, srv.logger)
 	srv.queue.StartConsumers(ctx)
 
 	srv.logger.Info("SMTP server started", "address", addr)

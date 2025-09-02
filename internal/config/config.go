@@ -10,6 +10,7 @@ type Config struct {
 	Security SecurityConfig `yaml:"security"`
 	Logging  LoggingConfig  `yaml:"logging"`
 	Queue    QueueConfig    `yaml:"queue"`
+	Delivery DeliveryConfig `yaml:"delivery"`
 }
 
 type ServerConfig struct {
@@ -72,6 +73,15 @@ type QueueConfig struct {
 	MaxConsumers int `yaml:"max_consumers"`
 }
 
+type DeliveryConfig struct {
+	VirtualMaildirPath string              `yaml:"virtual_maildir_path"`
+	Local              LocalDeliveryConfig `yaml:"local"`
+}
+
+type LocalDeliveryConfig struct {
+	MaxWorkers int `yaml:"max_workers"`
+}
+
 type UserConfig struct {
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
@@ -129,6 +139,12 @@ func DefaultConfig() *Config {
 		Queue: QueueConfig{
 			BufferSize:   1000,
 			MaxConsumers: 10,
+		},
+		Delivery: DeliveryConfig{
+			VirtualMaildirPath: "/var/mail/virtual",
+			Local: LocalDeliveryConfig{
+				MaxWorkers: 10,
+			},
 		},
 	}
 }

@@ -181,3 +181,23 @@ func streamSMTPData(ctx context.Context, file *os.File, ioreader io.Reader, maxS
 	}
 	return totalWritten, nil
 }
+
+// MoveMessage atomically moves a message between spool states using the message filename
+func MoveMessage(spoolDir string, msg *Message, fromState, toState MessageState) error {
+	filename := msg.Filename()
+	sourceFile := filepath.Join(spoolDir, string(fromState), filename)
+	targetFile := filepath.Join(spoolDir, string(toState), filename)
+
+	// Atomic move
+	if err := os.Rename(sourceFile, targetFile); err != nil {
+		return fmt.Errorf("failed to move message %s from %s to %s: %w", msg.ID, fromState, toState, err)
+	}
+
+	return nil
+}
+
+// GetMessagePath returns the full file path for a message in a given state
+func GetMessagePath(spoolDir string, msg *Message, state MessageState) string {
+	filename := msg.Filename()
+	return filepath.Join(spoolDir, string(state), filename)
+}

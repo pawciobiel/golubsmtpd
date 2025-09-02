@@ -8,16 +8,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// RecipientType represents the type of recipient domain
-type RecipientType string
-
-const (
-	RecipientLocal    RecipientType = "local"
-	RecipientVirtual  RecipientType = "virtual"
-	RecipientRelay    RecipientType = "relay"
-	RecipientExternal RecipientType = "external"
-)
-
 // MessageState represents the lifecycle state of a message in the spool system
 type MessageState string
 
@@ -27,11 +17,6 @@ const (
 	MessageStateFailed     MessageState = "failed"     // Failed delivery attempts
 	MessageStateDelivered  MessageState = "delivered"  // Successfully delivered (archive)
 )
-
-// String returns the string representation of RecipientType
-func (rt RecipientType) String() string {
-	return string(rt)
-}
 
 // String returns the string representation of MessageState
 func (ms MessageState) String() string {

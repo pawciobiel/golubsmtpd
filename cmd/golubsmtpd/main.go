@@ -12,8 +12,8 @@ import (
 	"github.com/pawciobiel/golubsmtpd/internal/auth"
 	"github.com/pawciobiel/golubsmtpd/internal/config"
 	"github.com/pawciobiel/golubsmtpd/internal/logging"
-	"github.com/pawciobiel/golubsmtpd/internal/server"
 	"github.com/pawciobiel/golubsmtpd/internal/queue"
+	"github.com/pawciobiel/golubsmtpd/internal/server"
 )
 
 func main() {

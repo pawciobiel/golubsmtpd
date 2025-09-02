@@ -11,7 +11,7 @@ import (
 	"github.com/pawciobiel/golubsmtpd/internal/config"
 )
 
-func createTestConfig(t *testing.T) (*config.Config, string) {
+func createSpoolTestConfig(t *testing.T) (*config.Config, string) {
 	t.Helper()
 
 	// Create temporary directory for test
@@ -49,7 +49,7 @@ func createTestSpoolMessage() *Message {
 }
 
 func TestStreamEmailContent_BasicMessage(t *testing.T) {
-	cfg, tempDir := createTestConfig(t)
+	cfg, tempDir := createSpoolTestConfig(t)
 	defer os.RemoveAll(tempDir)
 
 	ctx := context.Background()
@@ -94,7 +94,7 @@ func TestStreamEmailContent_BasicMessage(t *testing.T) {
 }
 
 func TestStreamEmailContent_EmptyData(t *testing.T) {
-	cfg, tempDir := createTestConfig(t)
+	cfg, tempDir := createSpoolTestConfig(t)
 	defer os.RemoveAll(tempDir)
 
 	ctx := context.Background()
@@ -126,7 +126,7 @@ func TestStreamEmailContent_EmptyData(t *testing.T) {
 }
 
 func TestStreamEmailContent_MultilineMessage(t *testing.T) {
-	cfg, tempDir := createTestConfig(t)
+	cfg, tempDir := createSpoolTestConfig(t)
 	defer os.RemoveAll(tempDir)
 
 	ctx := context.Background()
@@ -175,7 +175,7 @@ func TestStreamEmailContent_MultilineMessage(t *testing.T) {
 }
 
 func TestStreamEmailContent_MessageSizeLimit(t *testing.T) {
-	cfg, tempDir := createTestConfig(t)
+	cfg, tempDir := createSpoolTestConfig(t)
 	defer os.RemoveAll(tempDir)
 
 	// Set a small message size limit
