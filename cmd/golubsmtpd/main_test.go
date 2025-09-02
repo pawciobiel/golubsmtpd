@@ -7,7 +7,6 @@ import (
 
 	"github.com/pawciobiel/golubsmtpd/internal/config"
 	"github.com/pawciobiel/golubsmtpd/internal/queue"
-	"github.com/pawciobiel/golubsmtpd/internal/storage"
 )
 
 func TestInitializeSpoolDirectories(t *testing.T) {
@@ -17,7 +16,7 @@ func TestInitializeSpoolDirectories(t *testing.T) {
 		SpoolDir: tempDir,
 	}
 
-	err := storage.InitializeSpoolDirectories(cfg.SpoolDir)
+	err := queue.InitializeSpoolDirectories(cfg.SpoolDir)
 	if err != nil {
 		t.Fatalf("InitializeSpoolDirectories failed: %v", err)
 	}
@@ -35,7 +34,7 @@ func TestInitializeSpoolDirectoriesPermissions(t *testing.T) {
 	tempDir := t.TempDir()
 	cfg := &config.ServerConfig{SpoolDir: tempDir}
 
-	err := storage.InitializeSpoolDirectories(cfg.SpoolDir)
+	err := queue.InitializeSpoolDirectories(cfg.SpoolDir)
 	if err != nil {
 		t.Fatalf("initializeSpoolDirectories failed: %v", err)
 	}
@@ -65,7 +64,7 @@ func TestInitializeSpoolDirectoriesWithCustomPath(t *testing.T) {
 		SpoolDir: customSpoolDir,
 	}
 
-	err := storage.InitializeSpoolDirectories(cfg.SpoolDir)
+	err := queue.InitializeSpoolDirectories(cfg.SpoolDir)
 	if err != nil {
 		t.Fatalf("initializeSpoolDirectories with custom path failed: %v", err)
 	}
@@ -93,13 +92,13 @@ func TestInitializeSpoolDirectoriesIdempotent(t *testing.T) {
 	}
 
 	// First call
-	err := storage.InitializeSpoolDirectories(cfg.SpoolDir)
+	err := queue.InitializeSpoolDirectories(cfg.SpoolDir)
 	if err != nil {
 		t.Fatalf("First call failed: %v", err)
 	}
 
 	// Second call should not error (idempotent)
-	err = storage.InitializeSpoolDirectories(cfg.SpoolDir)
+	err = queue.InitializeSpoolDirectories(cfg.SpoolDir)
 	if err != nil {
 		t.Fatalf("Second call failed: %v", err)
 	}
@@ -124,7 +123,7 @@ func TestInitializeSpoolDirectoriesInvalidPath(t *testing.T) {
 		SpoolDir: "/dev/null/invalid",
 	}
 
-	err := storage.InitializeSpoolDirectories(cfg.SpoolDir)
+	err := queue.InitializeSpoolDirectories(cfg.SpoolDir)
 	if err == nil {
 		t.Fatal("Expected error for invalid path, got nil")
 	}

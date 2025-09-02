@@ -1,4 +1,4 @@
-package storage
+package queue
 
 import (
 	"context"
@@ -9,14 +9,13 @@ import (
 	"time"
 
 	"github.com/pawciobiel/golubsmtpd/internal/config"
-	"github.com/pawciobiel/golubsmtpd/internal/queue"
 )
 
 func createTestConfig(t *testing.T) (*config.Config, string) {
 	t.Helper()
 
 	// Create temporary directory for test
-	tempDir, err := os.MkdirTemp("", "golubsmtpd-storage-test-*")
+	tempDir, err := os.MkdirTemp("", "golubsmtpd-spool-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
@@ -38,9 +37,9 @@ func createTestConfig(t *testing.T) (*config.Config, string) {
 	return cfg, tempDir
 }
 
-func createTestMessage() *queue.Message {
-	return &queue.Message{
-		ID:      queue.GenerateID(),
+func createTestSpoolMessage() *Message {
+	return &Message{
+		ID:      GenerateID(),
 		Created: time.Now().UTC(),
 		From:    "test@example.com",
 		LocalRecipients: map[string]struct{}{
@@ -54,7 +53,7 @@ func TestStreamEmailContent_BasicMessage(t *testing.T) {
 	defer os.RemoveAll(tempDir)
 
 	ctx := context.Background()
-	message := createTestMessage()
+	message := createTestSpoolMessage()
 
 	// Simulate SMTP DATA content with proper termination
 	smtpData := "Subject: Test Message\r\n\r\nHello World!\r\nThis is a test.\r\n.\r\n"
@@ -99,7 +98,7 @@ func TestStreamEmailContent_EmptyData(t *testing.T) {
 	defer os.RemoveAll(tempDir)
 
 	ctx := context.Background()
-	message := createTestMessage()
+	message := createTestSpoolMessage()
 
 	// Empty data with just terminator (valid SMTP)
 	smtpData := "\r\n.\r\n"
@@ -131,7 +130,7 @@ func TestStreamEmailContent_MultilineMessage(t *testing.T) {
 	defer os.RemoveAll(tempDir)
 
 	ctx := context.Background()
-	message := createTestMessage()
+	message := createTestSpoolMessage()
 
 	// Multi-line message
 	smtpData := "From: sender@example.com\r\n" +
@@ -183,7 +182,7 @@ func TestStreamEmailContent_MessageSizeLimit(t *testing.T) {
 	cfg.Server.MaxMessageSize = 50
 
 	ctx := context.Background()
-	message := createTestMessage()
+	message := createTestSpoolMessage()
 
 	// Create a message that exceeds the limit
 	longContent := strings.Repeat("A", 100)
@@ -213,7 +212,7 @@ func TestInitializeSpoolDirectories(t *testing.T) {
 	}
 
 	// Verify all required directories were created
-	requiredDirs := queue.GetRequiredSpoolDirectories()
+	requiredDirs := GetRequiredSpoolDirectories()
 	for _, state := range requiredDirs {
 		dir := filepath.Join(tempDir, string(state))
 		if _, err := os.Stat(dir); os.IsNotExist(err) {

@@ -1,4 +1,4 @@
-package storage
+package queue
 
 import (
 	"bufio"
@@ -11,12 +11,11 @@ import (
 	"path/filepath"
 
 	"github.com/pawciobiel/golubsmtpd/internal/config"
-	"github.com/pawciobiel/golubsmtpd/internal/queue"
 )
 
 // InitializeSpoolDirectories creates all required spool directories with secure permissions
 func InitializeSpoolDirectories(spoolDir string) error {
-	for _, state := range queue.GetRequiredSpoolDirectories() {
+	for _, state := range GetRequiredSpoolDirectories() {
 		dir := filepath.Join(spoolDir, string(state))
 		if err := os.MkdirAll(dir, 0700); err != nil {
 			return fmt.Errorf("failed to create spool directory %s: %w", dir, err)
@@ -27,7 +26,7 @@ func InitializeSpoolDirectories(spoolDir string) error {
 
 // StreamEmailContent streams email content directly to disk using chunked reading
 //
-// Storage layer responsibilities:
+// Spool layer responsibilities:
 // - Stream raw email data to disk atomically (no MIME parsing)
 // - Handle SMTP protocol (dot-stuffing, DATA termination)
 // - Validate file integrity and proper CRLF endings
@@ -37,11 +36,11 @@ func InitializeSpoolDirectories(spoolDir string) error {
 //
 // Returns the total bytes written
 // Message.ID must already be set by the caller
-func StreamEmailContent(ctx context.Context, cfg *config.Config, message *queue.Message, reader io.Reader) (int64, error) {
+func StreamEmailContent(ctx context.Context, cfg *config.Config, message *Message, reader io.Reader) (int64, error) {
 	// Use message's standardized filename
 	filename := message.Filename()
 
-	incomingDir := filepath.Join(cfg.Server.SpoolDir, string(queue.MessageStateIncoming))
+	incomingDir := filepath.Join(cfg.Server.SpoolDir, string(MessageStateIncoming))
 	tempFile := filepath.Join(incomingDir, filename+".tmp")
 	finalFile := filepath.Join(incomingDir, filename)
 

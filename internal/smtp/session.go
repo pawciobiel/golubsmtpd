@@ -11,7 +11,6 @@ import (
 	"github.com/pawciobiel/golubsmtpd/internal/auth"
 	"github.com/pawciobiel/golubsmtpd/internal/config"
 	"github.com/pawciobiel/golubsmtpd/internal/queue"
-	"github.com/pawciobiel/golubsmtpd/internal/storage"
 )
 
 // SessionState represents the current state of an SMTP session
@@ -461,7 +460,7 @@ func (sess *Session) handleData(ctx context.Context, args []string) error {
 	}
 
 	// Stream message data directly to storage
-	totalSize, err := storage.StreamEmailContent(ctx, sess.config, sess.currentMessage, sess.textproto.R)
+	totalSize, err := queue.StreamEmailContent(ctx, sess.config, sess.currentMessage, sess.textproto.R)
 	if err != nil {
 		sess.logger.Error("Error storing message data", "error", err, "client_ip", sess.clientIP)
 		return sess.writeResponse(Response(StatusLocalError, "Error storing message"))
