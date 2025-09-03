@@ -22,6 +22,7 @@ type Queue struct {
 	config       *config.Config
 	sem          chan struct{} // Limits concurrent processors
 	processorWg  sync.WaitGroup
+	consumerDone chan struct{} // Signals when consumer loop exits
 
 	// Publisher coordination
 	publisherCtx    context.Context
@@ -37,15 +38,18 @@ func NewQueue(ctx context.Context, config *config.Config, logger *slog.Logger) *
 		logger:          logger,
 		config:          config,
 		sem:             make(chan struct{}, config.Queue.MaxConsumers),
+		processorWg:     sync.WaitGroup{},
+		consumerDone:    make(chan struct{}),
 		publisherCtx:    publisherCtx,
 		publisherCancel: cancel, // Store the cancel function
 	}
 }
 
-// StartConsumers starts the consumer loop in a goroutine (non-blocking)
-func (q *Queue) StartConsumers(ctx context.Context) {
+// StartConsumer starts the consumer loop in a goroutine (non-blocking)
+func (q *Queue) StartConsumer(ctx context.Context) {
 	q.logger.Debug("Starting message queue consumers")
 	go func() {
+		defer close(q.consumerDone) // Signal when consumer loop exits
 		q.logger.Debug("Consumer loop started")
 		for {
 			select {
@@ -58,7 +62,7 @@ func (q *Queue) StartConsumers(ctx context.Context) {
 
 				q.logger.Debug("Message received, acquiring semaphore", "message_id", msg.ID)
 				// Try to acquire semaphore - this will block if at capacity
-				q.sem <- struct{}{}
+				q.sem <- struct{}{} // Acquire semaphore BEFORE spawning goroutine
 				q.processorWg.Go(func() {
 					defer func() { <-q.sem }() // Release semaphore
 					q.processMessage(ctx, msg)
@@ -163,7 +167,11 @@ func (q *Queue) Stop(ctx context.Context) error {
 	q.logger.Debug("Closing message queue channel")
 	close(q.messageQueue)
 
-	// Phase 4: Wait for processors to finish
+	// Phase 4: Wait for consumer loop to exit
+	q.logger.Debug("Waiting for consumer loop to exit")
+	<-q.consumerDone
+
+	// Phase 5: Wait for processors to finish
 	q.logger.Debug("Waiting for processors to finish")
 	done := make(chan struct{})
 	go func() {

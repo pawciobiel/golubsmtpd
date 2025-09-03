@@ -47,7 +47,7 @@ func TestQueue_BasicPublishAndConsume(t *testing.T) {
 	queue := NewQueue(ctx, cfg, logger)
 
 	// Start consumers
-	queue.StartConsumers(ctx)
+	queue.StartConsumer(ctx)
 	defer queue.Stop(ctx)
 
 	// Give consumers time to start
@@ -99,7 +99,7 @@ func TestQueue_PublishAfterStop(t *testing.T) {
 	queue := NewQueue(ctx, cfg, logger)
 
 	// Start and immediately stop
-	queue.StartConsumers(ctx)
+	queue.StartConsumer(ctx)
 	err := queue.Stop(ctx)
 	if err != nil {
 		t.Fatalf("Failed to stop queue: %v", err)
@@ -121,7 +121,7 @@ func TestQueue_ConcurrentPublishing(t *testing.T) {
 	cfg := &config.Config{Queue: config.QueueConfig{BufferSize: 100, MaxConsumers: 5}}
 	queue := NewQueue(ctx, cfg, logger)
 
-	queue.StartConsumers(ctx)
+	queue.StartConsumer(ctx)
 	defer queue.Stop(ctx)
 
 	// Give consumers time to start
@@ -176,7 +176,7 @@ func TestQueue_SemaphoreLimit(t *testing.T) {
 	cfg := &config.Config{Queue: config.QueueConfig{BufferSize: 10, MaxConsumers: 1}}
 	queue := NewQueue(ctx, cfg, logger)
 
-	queue.StartConsumers(ctx)
+	queue.StartConsumer(ctx)
 	defer queue.Stop(ctx)
 
 	time.Sleep(10 * time.Millisecond)
@@ -203,7 +203,7 @@ func TestQueue_GracefulShutdown(t *testing.T) {
 	cfg := &config.Config{Queue: config.QueueConfig{BufferSize: 5, MaxConsumers: 2}}
 	queue := NewQueue(ctx, cfg, logger)
 
-	queue.StartConsumers(ctx)
+	queue.StartConsumer(ctx)
 
 	// Publish some messages
 	for i := 0; i < 3; i++ {
@@ -235,7 +235,7 @@ func TestQueue_ContextCancellation(t *testing.T) {
 	cfg := &config.Config{Queue: config.QueueConfig{BufferSize: 5, MaxConsumers: 1}}
 	queue := NewQueue(ctx, cfg, logger)
 
-	queue.StartConsumers(ctx)
+	queue.StartConsumer(ctx)
 
 	// Publish a message
 	msg := createTestMessage()
