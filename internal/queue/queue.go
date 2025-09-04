@@ -224,20 +224,20 @@ func (q *Queue) processMessage(ctx context.Context, msg *Message) {
 		go func() {
 			maxWorkers := delivery.GetMaxWorkers(q.config.Delivery.Local.MaxWorkers, len(localRecipients))
 			result := delivery.DeliverWithWorkers(ctx, localRecipients, maxWorkers, delivery.RecipientLocal,
-				func(ctx context.Context, recipient string) bool {
-					return delivery.DeliverToLocalUser(ctx, messagePath, recipient)
+				func(ctx context.Context, recipient string) error {
+					return delivery.DeliverToLocalUser(ctx, msg, messagePath, recipient)
 				})
 			resultChan <- result
 		}()
 	}
 
-	// Parallel delivery for virtual recipients using DeliverWithWorkers
+	// Parallel delivery for virtual recipients
 	if len(virtualRecipients) > 0 {
 		go func() {
-			maxWorkers := delivery.GetMaxWorkers(q.config.Delivery.Local.MaxWorkers, len(virtualRecipients))
+			maxWorkers := delivery.GetMaxWorkers(q.config.Delivery.Virtual.MaxWorkers, len(virtualRecipients))
 			result := delivery.DeliverWithWorkers(ctx, virtualRecipients, maxWorkers, delivery.RecipientVirtual,
-				func(ctx context.Context, recipient string) bool {
-					return delivery.DeliverToVirtualUser(ctx, messagePath, recipient, q.config.Delivery.VirtualMaildirPath)
+				func(ctx context.Context, recipient string) error {
+					return delivery.DeliverToVirtualUser(ctx, msg, messagePath, recipient, q.config.Delivery.Virtual.BaseDirPath)
 				})
 			resultChan <- result
 		}()

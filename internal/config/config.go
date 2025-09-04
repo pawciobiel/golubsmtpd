@@ -74,12 +74,17 @@ type QueueConfig struct {
 }
 
 type DeliveryConfig struct {
-	VirtualMaildirPath string              `yaml:"virtual_maildir_path"`
-	Local              LocalDeliveryConfig `yaml:"local"`
+	Local   LocalDeliveryConfig   `yaml:"local"`
+	Virtual VirtualDeliveryConfig `yaml:"virtual"`
 }
 
 type LocalDeliveryConfig struct {
 	MaxWorkers int `yaml:"max_workers"`
+}
+
+type VirtualDeliveryConfig struct {
+	BaseDirPath string `yaml:"base_dir_path"`
+	MaxWorkers  int    `yaml:"max_workers"`
 }
 
 type UserConfig struct {
@@ -141,9 +146,12 @@ func DefaultConfig() *Config {
 			MaxConsumers: 10,
 		},
 		Delivery: DeliveryConfig{
-			VirtualMaildirPath: "/var/mail/virtual",
 			Local: LocalDeliveryConfig{
 				MaxWorkers: 10,
+			},
+			Virtual: VirtualDeliveryConfig{
+				BaseDirPath: "/var/mail/virtual",
+				MaxWorkers:  10,
 			},
 		},
 	}

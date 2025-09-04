@@ -5,7 +5,7 @@ import (
 )
 
 // DeliverFunc represents a function that delivers a message to a single recipient
-type DeliverFunc func(ctx context.Context, recipient string) bool
+type DeliverFunc func(ctx context.Context, recipient string) error
 
 // DeliverWithWorkers orchestrates concurrent delivery using semaphore-limited goroutines
 // This eliminates boilerplate code common to all delivery types
@@ -41,8 +41,8 @@ func DeliverWithWorkers(
 		go func(recipient string) {
 			defer func() { <-sem }() // Release semaphore
 
-			success := deliverFunc(ctx, recipient)
-			resultChan <- DeliveryOutcome{Recipient: recipient, Success: success}
+			err := deliverFunc(ctx, recipient)
+			resultChan <- DeliveryOutcome{Recipient: recipient, Success: err == nil}
 		}(recipient)
 	}
 

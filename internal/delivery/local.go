@@ -2,67 +2,136 @@ package delivery
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"log/slog"
+	"os"
 	"os/user"
 	"path/filepath"
+	"time"
 
 	"github.com/pawciobiel/golubsmtpd/internal/auth"
-	"github.com/pawciobiel/golubsmtpd/internal/config"
+	"github.com/pawciobiel/golubsmtpd/internal/types"
 )
 
 // GetLocalMaildirPath returns the Maildir path for a local system user
-func GetLocalMaildirPath(email string) string {
+var GetLocalMaildirPath = func(email string) string {
 	username := auth.ExtractUsername(email)
 	return filepath.Join("/home", username, "Maildir", "new")
 }
 
-// DeliverToLocal handles delivery to local system users with semaphore-limited goroutines
-// Recipients are delivered to ~/Maildir/new/ in their home directories
-// Note: All recipients have already been validated by authentication system during RCPT TO
-func DeliverToLocal(ctx context.Context, messagePath string, recipients map[string]struct{}, config config.LocalDeliveryConfig) DeliveryResult {
-	maxWorkers := GetMaxWorkers(config.MaxWorkers, len(recipients))
-
-	return DeliverWithWorkers(ctx, recipients, maxWorkers, RecipientLocal,
-		func(ctx context.Context, recipient string) bool {
-			return DeliverToLocalUser(ctx, messagePath, recipient)
-		})
-}
-
 // DeliverToLocalUser handles delivery to a single local user
 // Note: recipient is already validated by authentication system during RCPT TO
-func DeliverToLocalUser(ctx context.Context, messagePath, recipient string) bool {
-	// Check for context cancellation
-	select {
-	case <-ctx.Done():
-		return false
-	default:
-	}
-
-	// Get Maildir path for this local user
-	maildirNew := GetLocalMaildirPath(recipient)
-
-	// Extract username for logging and validation
+func DeliverToLocalUser(ctx context.Context, msg *types.Message, messagePath, recipient string) error {
+	// Extract username for validation and path calculation
 	username := auth.ExtractUsername(recipient)
 
 	// Verify user exists (should succeed since recipient was validated during RCPT TO)
 	_, err := user.Lookup(username)
 	if err != nil {
-		slog.Error("Local user lookup failed for validated recipient", "recipient", recipient, "username", username, "error", err)
-		return false
+		return fmt.Errorf("local user lookup failed for recipient %s: %w", recipient, err)
 	}
 
-	// For now, just log the delivery attempt (placeholder implementation)
-	slog.Info("Local delivery",
+	// Calculate Maildir base path for local user
+	maildirBase := filepath.Join("/home", username, "Maildir")
+
+	// Perform the actual delivery
+	if err := deliverToMaildir(ctx, msg, messagePath, maildirBase, recipient); err != nil {
+		return err
+	}
+
+	slog.Info("Local delivery successful",
 		"recipient", recipient,
 		"username", username,
-		"maildir", maildirNew,
-		"message_path", messagePath)
+		"message_id", msg.ID)
 
-	// TODO: Implement actual Maildir delivery by streaming from messagePath
-	// - Copy/stream file from messagePath to maildirNew/unique_filename
-	// - Ensure atomic operation (temp file + rename)
-	// - Handle disk space and permission errors
+	return nil
+}
 
-	// For now, mark as successful since this is a placeholder
-	return true
+// createMaildirStructure creates the standard Maildir directory structure (new, cur, tmp)
+func createMaildirStructure(maildirPath string) error {
+	dirs := []string{
+		filepath.Join(maildirPath, "new"),
+		filepath.Join(maildirPath, "cur"),
+		filepath.Join(maildirPath, "tmp"),
+	}
+
+	for _, dir := range dirs {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			return fmt.Errorf("failed to create directory %s: %w", dir, err)
+		}
+	}
+
+	return nil
+}
+
+// streamMessageToFile copies a message from source to destination with streaming
+func streamMessageToFile(ctx context.Context, sourcePath, destPath string) error {
+	// Check for context cancellation
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	// Open source file
+	srcFile, err := os.Open(sourcePath)
+	if err != nil {
+		return fmt.Errorf("failed to open source file %s: %w", sourcePath, err)
+	}
+	defer srcFile.Close()
+
+	// Create destination file
+	dstFile, err := os.Create(destPath)
+	if err != nil {
+		return fmt.Errorf("failed to create destination file %s: %w", destPath, err)
+	}
+	defer dstFile.Close()
+
+	// Stream copy
+	_, err = io.Copy(dstFile, srcFile)
+	if err != nil {
+		return fmt.Errorf("failed to copy message content: %w", err)
+	}
+
+	// Sync to ensure data is written to disk
+	if err = dstFile.Sync(); err != nil {
+		return fmt.Errorf("failed to sync file to disk: %w", err)
+	}
+
+	return nil
+}
+
+// deliverToMaildir handles the common Maildir delivery logic
+func deliverToMaildir(ctx context.Context, msg *types.Message, messagePath, maildirBase, recipient string) error {
+	// Check for context cancellation
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	// Create Maildir directory structure if it doesn't exist
+	if err := createMaildirStructure(maildirBase); err != nil {
+		return fmt.Errorf("failed to create Maildir structure for %s: %w", recipient, err)
+	}
+
+	// Generate unique filename
+	uniqueFilename := generateUniqueFilename(msg.ID)
+
+	// Write to new/ directory
+	maildirNew := filepath.Join(maildirBase, "new")
+	finalFile := filepath.Join(maildirNew, uniqueFilename)
+
+	// Stream message from spool to Maildir
+	if err := streamMessageToFile(ctx, messagePath, finalFile); err != nil {
+		return fmt.Errorf("failed to deliver message %s to %s: %w", msg.ID, recipient, err)
+	}
+
+	return nil
+}
+
+// generateUniqueFilename creates a unique filename for Maildir delivery
+func generateUniqueFilename(messageID string) string {
+	timestamp := time.Now().Format("20060102T150405Z")
+	pid := os.Getpid()
+	return fmt.Sprintf("%s.%d.%s.%s", timestamp, pid, messageID, "golubsmtpd")
 }
