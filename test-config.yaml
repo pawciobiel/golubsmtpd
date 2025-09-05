@@ -3,14 +3,14 @@ server:
   port: 2525
   hostname: "localhost"
   max_connections: 100
-  max_connections_per_ip: 10
-  max_recipients: 100
+  max_connections_per_ip: 100
+  max_recipients: 1000
   max_message_size: 10485760 # 10MB
   read_timeout: 30s
   write_timeout: 30s
   email_validation: ["basic"]
   local_domains: ["localhost"]
-  virtual_domains: ["mail.localhost"]
+  virtual_domains: ["localhost.localdomain"]
   relay_domains: []
   spool_dir: "./test-spool"
 
@@ -26,7 +26,9 @@ auth:
     memory:
       users:
         - username: "test@localhost"
-          password: "test123"
+          password: "test-local-user"
+        - username: "test@localhost.localdomain"
+          password: "test-virtual-user"
 
 security:
   reverse_dns:
@@ -45,4 +47,11 @@ logging:
 
 queue:
   buffer_size: 100
-  max_consumers: 2
+  max_consumers: 10
+
+delivery:
+  local:
+    max_workers: 10
+  virtual:
+    base_dir_path: "./test-mail"
+    max_workers: 10

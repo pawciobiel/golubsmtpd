@@ -1,2 +1,8 @@
 /golubsmtpd
-test-spool/
+/test-spool/
+/test-mail/
+/pprof/*.png
+/pprof/*.txt
+/pprof/*.gz
+/pprof/memory_data/
+smtpd-tester/smtpd-tester
