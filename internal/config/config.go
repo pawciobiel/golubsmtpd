@@ -11,6 +11,7 @@ type Config struct {
 	Logging  LoggingConfig  `yaml:"logging"`
 	Queue    QueueConfig    `yaml:"queue"`
 	Delivery DeliveryConfig `yaml:"delivery"`
+	Cache    CacheConfig    `yaml:"cache"`
 }
 
 type ServerConfig struct {
@@ -87,6 +88,16 @@ type VirtualDeliveryConfig struct {
 	MaxWorkers  int    `yaml:"max_workers"`
 }
 
+type CacheConfig struct {
+	SystemUsers  UserCacheConfig `yaml:"system_users"`
+	VirtualUsers UserCacheConfig `yaml:"virtual_users"`
+}
+
+type UserCacheConfig struct {
+	Capacity int           `yaml:"capacity"`
+	TTL      time.Duration `yaml:"ttl"`
+}
+
 type UserConfig struct {
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
@@ -152,6 +163,16 @@ func DefaultConfig() *Config {
 			Virtual: VirtualDeliveryConfig{
 				BaseDirPath: "/var/mail/virtual",
 				MaxWorkers:  10,
+			},
+		},
+		Cache: CacheConfig{
+			SystemUsers: UserCacheConfig{
+				Capacity: 100,
+				TTL:      2 * time.Minute,
+			},
+			VirtualUsers: UserCacheConfig{
+				Capacity: 10000,
+				TTL:      2 * time.Minute,
 			},
 		},
 	}

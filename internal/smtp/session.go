@@ -36,6 +36,7 @@ type Session struct {
 	hostname       string
 	authenticator  auth.Authenticator
 	emailValidator *EmailValidator
+	rcptValidator  *RcptValidator
 	queue          *queue.Queue
 
 	// Session state
@@ -62,6 +63,7 @@ func NewSession(cfg *config.Config, logger *slog.Logger, textprotoConn *textprot
 		hostname:       cfg.Server.Hostname,
 		authenticator:  authenticator,
 		emailValidator: NewEmailValidator(cfg),
+		rcptValidator:  NewRcptValidator(cfg, authenticator, logger),
 		queue:          q,
 		state:          StateConnected,
 	}
@@ -89,11 +91,6 @@ func (sess *Session) classifyDomain(domain string) delivery.RecipientType {
 		return delivery.RecipientRelay
 	}
 	return delivery.RecipientExternal
-}
-
-// validateUserWithChain tries authentication plugins in chain order
-func (sess *Session) validateUserWithChain(ctx context.Context, email string) bool {
-	return sess.authenticator.ValidateUser(ctx, email)
 }
 
 // Handle processes the SMTP session
@@ -404,9 +401,9 @@ func (sess *Session) handleRcpt(ctx context.Context, args []string) error {
 	// Handle based on domain type
 	switch domainType {
 	case delivery.RecipientLocal, delivery.RecipientVirtual:
-		// Validate user exists using plugin chain
-		if !sess.validateUserWithChain(ctx, emailAddr.Full) {
-			sess.logger.Debug("User validation failed", "recipient", emailAddr.Full, "domain_type", domainType, "client_ip", sess.clientIP)
+		// Validate recipient using unified validator
+		if !sess.rcptValidator.IsRecipientValid(ctx, emailAddr.Full, domainType) {
+			sess.logger.Debug("Recipient validation failed", "recipient", emailAddr.Full, "domain_type", domainType, "client_ip", sess.clientIP)
 			return sess.writeResponse(Response(StatusMailboxUnavailable, "User unknown"))
 		}
 

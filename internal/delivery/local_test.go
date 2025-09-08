@@ -70,12 +70,15 @@ func TestDeliverToLocalUser(t *testing.T) {
 func TestDeliverToLocalUser_NonExistentUser(t *testing.T) {
 	msg := &types.Message{ID: "test", From: "test@example.com"}
 
+	// Note: User validation is now done during RCPT TO processing
+	// Local delivery assumes the user was already validated
+	// This test now checks that delivery fails gracefully when directory creation fails
 	err := DeliverToLocalUser(context.Background(), msg, "/tmp/test", "nonexistent@localhost")
 	if err == nil {
-		t.Fatal("Expected error for non-existent user")
+		t.Fatal("Expected error for delivery to non-accessible directory")
 	}
-	if !strings.Contains(err.Error(), "local user lookup failed") {
-		t.Errorf("Expected lookup error, got: %v", err)
+	if !strings.Contains(err.Error(), "failed to create Maildir structure") {
+		t.Errorf("Expected Maildir creation error, got: %v", err)
 	}
 }
 

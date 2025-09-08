@@ -6,7 +6,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"os/user"
 	"path/filepath"
 	"time"
 
@@ -21,18 +20,13 @@ var GetLocalMaildirPath = func(email string) string {
 }
 
 // DeliverToLocalUser handles delivery to a single local user
-// Note: recipient is already validated by authentication system during RCPT TO
+// Note: recipient is already validated by RCPT TO system user validation
 func DeliverToLocalUser(ctx context.Context, msg *types.Message, messagePath, recipient string) error {
-	// Extract username for validation and path calculation
+	// Extract username for path calculation
 	username := auth.ExtractUsername(recipient)
 
-	// Verify user exists (should succeed since recipient was validated during RCPT TO)
-	_, err := user.Lookup(username)
-	if err != nil {
-		return fmt.Errorf("local user lookup failed for recipient %s: %w", recipient, err)
-	}
-
 	// Calculate Maildir base path for local user
+	// Note: No user.Lookup() needed - already validated during RCPT TO
 	maildirBase := filepath.Join("/home", username, "Maildir")
 
 	// Perform the actual delivery

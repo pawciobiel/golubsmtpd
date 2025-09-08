@@ -15,7 +15,6 @@ func GetVirtualMaildirPath(email string, virtualRoot string) string {
 	return filepath.Join(virtualRoot, domain, username, "Maildir", "new")
 }
 
-
 // DeliverToVirtualUser handles delivery to a single virtual user
 // Note: recipient is already validated by authentication system during RCPT TO
 func DeliverToVirtualUser(ctx context.Context, msg *types.Message, messagePath, recipient, virtualRoot string) error {
