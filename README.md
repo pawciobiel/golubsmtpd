@@ -2,6 +2,7 @@
 
 A small and hopefully fast MTA SMTP server, with some secure features,
 written in Go with minimal external dependencies.
+This is a toy project - not fully functional just yet... WIP!
 
 ## Features
 
