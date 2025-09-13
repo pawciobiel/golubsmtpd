@@ -29,9 +29,9 @@ func DefaultLoadTestOptions() SimpleLoadTestOptions {
 // SimpleLoadTest performs a basic SMTP load test
 func SimpleLoadTest(ctx context.Context, config *client.Config, opts SimpleLoadTestOptions, logger *slog.Logger) error {
 	ValidateConfig(config)
-	
+
 	smtpClient := client.New(config, logger)
-	
+
 	fmt.Printf("SMTP Load Test\n")
 	fmt.Printf("==============\n")
 	fmt.Printf("Target: %s:%d\n", config.Host, config.Port)
@@ -49,7 +49,7 @@ func SimpleLoadTest(ctx context.Context, config *client.Config, opts SimpleLoadT
 	}
 	fmt.Printf("Timeout: %s\n", config.Timeout)
 	fmt.Printf("\n")
-	
+
 	// Setup callbacks
 	onProgress := func(processed, total int64, rate float64) {
 		logger.Info("Progress",
@@ -60,7 +60,7 @@ func SimpleLoadTest(ctx context.Context, config *client.Config, opts SimpleLoadT
 			"rate", fmt.Sprintf("%.1f msg/sec", rate),
 		)
 	}
-	
+
 	onMessage := func(msgID int, success bool, err error, duration time.Duration) {
 		if opts.Workers == 1 {
 			if success {
@@ -76,7 +76,7 @@ func SimpleLoadTest(ctx context.Context, config *client.Config, opts SimpleLoadT
 			}
 		}
 	}
-	
+
 	sendOpts := client.SendOptions{
 		Messages:   opts.Messages,
 		Workers:    opts.Workers,
@@ -84,11 +84,11 @@ func SimpleLoadTest(ctx context.Context, config *client.Config, opts SimpleLoadT
 		OnProgress: onProgress,
 		OnMessage:  onMessage,
 	}
-	
+
 	if err := smtpClient.SendMessages(ctx, sendOpts); err != nil {
 		return fmt.Errorf("load test failed: %w", err)
 	}
-	
+
 	smtpClient.PrintStats()
 	return nil
 }

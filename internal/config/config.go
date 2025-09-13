@@ -29,6 +29,8 @@ type ServerConfig struct {
 	VirtualDomains      []string      `yaml:"virtual_domains"`
 	RelayDomains        []string      `yaml:"relay_domains"`
 	SpoolDir            string        `yaml:"spool_dir"`
+	SocketPath          string        `yaml:"socket_path"`
+	TrustedUsers        []string      `yaml:"trusted_users"`
 }
 
 type TLSConfig struct {
@@ -70,8 +72,11 @@ type LoggingConfig struct {
 }
 
 type QueueConfig struct {
-	BufferSize   int `yaml:"buffer_size"`
-	MaxConsumers int `yaml:"max_consumers"`
+	BufferSize     int           `yaml:"buffer_size"`
+	MaxConsumers   int           `yaml:"max_consumers"`
+	PublishTimeout time.Duration `yaml:"publish_timeout"`
+	RetryDelay     time.Duration `yaml:"retry_delay"`
+	MaxRetryDelay  time.Duration `yaml:"max_retry_delay"`
 }
 
 type DeliveryConfig struct {
@@ -80,7 +85,8 @@ type DeliveryConfig struct {
 }
 
 type LocalDeliveryConfig struct {
-	MaxWorkers int `yaml:"max_workers"`
+	BaseDirPath string `yaml:"base_dir_path"`
+	MaxWorkers  int    `yaml:"max_workers"`
 }
 
 type VirtualDeliveryConfig struct {
@@ -120,6 +126,8 @@ func DefaultConfig() *Config {
 			VirtualDomains:      []string{"mail.localhost"}, // Virtual users
 			RelayDomains:        []string{},                 // No relay by default
 			SpoolDir:            "/var/spool/golubsmtpd",
+			SocketPath:          "/var/run/golubsmtpd/golubsmtpd.sock",
+			TrustedUsers:        []string{"root", "mail", "daemon"},
 		},
 		TLS: TLSConfig{
 			Enabled: false,

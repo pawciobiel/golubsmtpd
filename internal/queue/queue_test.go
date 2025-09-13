@@ -6,6 +6,7 @@ import (
 	"os"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/pawciobiel/golubsmtpd/internal/config"
@@ -20,8 +21,11 @@ func createTestLogger() *slog.Logger {
 func createQueueTestConfig() *config.Config {
 	return &config.Config{
 		Queue: config.QueueConfig{
-			BufferSize:   10,
-			MaxConsumers: 2,
+			BufferSize:     10,
+			MaxConsumers:   2,
+			PublishTimeout: 500 * time.Millisecond,
+			RetryDelay:     50 * time.Millisecond,
+			MaxRetryDelay:  200 * time.Millisecond,
 		},
 	}
 }
@@ -67,27 +71,42 @@ func TestQueue_BasicPublishAndConsume(t *testing.T) {
 }
 
 func TestQueue_PublishToFullQueue(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
 
-	logger := createTestLogger()
-	// Create queue with buffer size 1 and no consumers
-	cfg := &config.Config{Queue: config.QueueConfig{BufferSize: 1, MaxConsumers: 1}}
-	queue := NewQueue(ctx, cfg, logger)
+		logger := createTestLogger()
+		// Create queue with buffer size 1 and no consumers
+		cfg := &config.Config{Queue: config.QueueConfig{BufferSize: 1, MaxConsumers: 1}}
+		queue := NewQueue(ctx, cfg, logger)
 
-	// Publish first message (should succeed)
-	msg1 := createTestMessage()
-	err := queue.PublishMessage(ctx, msg1)
-	if err != nil {
-		t.Fatalf("First publish should succeed: %v", err)
-	}
+		// Publish first message (should succeed)
+		msg1 := createTestMessage()
+		err := queue.PublishMessage(ctx, msg1)
+		if err != nil {
+			t.Fatalf("First publish should succeed: %v", err)
+		}
 
-	// Publish second message (should fail - queue full)
-	msg2 := createTestMessage()
-	err = queue.PublishMessage(ctx, msg2)
-	if err != ErrQueueFull {
-		t.Errorf("Expected ErrQueueFull, got: %v", err)
-	}
+		// Start second publish in goroutine (will timeout due to retry logic)
+		msg2 := createTestMessage()
+		errChan := make(chan error, 1)
+		go func() {
+			errChan <- queue.PublishMessage(ctx, msg2)
+		}()
+
+		// Wait for the publish to timeout (synctest automatically advances time)
+		// The goroutine will eventually complete and send to errChan
+		var publishErr error
+		select {
+		case publishErr = <-errChan:
+			// Got result
+		}
+
+		// Should get ErrQueueFull after timeout
+		if publishErr != ErrQueueFull {
+			t.Errorf("Expected ErrQueueFull, got: %v", publishErr)
+		}
+	})
 }
 
 func TestQueue_PublishAfterStop(t *testing.T) {

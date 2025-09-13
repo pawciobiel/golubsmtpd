@@ -102,10 +102,19 @@ func (q *Queue) PublishMessage(ctx context.Context, msg *Message) error {
 		// Queue full, start retry logic
 	}
 
-	// Retry with exponential backoff up to 5 seconds total
-	retryDelay := 100 * time.Millisecond
-	maxDelay := 1 * time.Second
-	totalTimeout := 5 * time.Second
+	// Retry with exponential backoff using configured timing
+	retryDelay := q.config.Queue.RetryDelay
+	if retryDelay == 0 {
+		retryDelay = 100 * time.Millisecond // Default fallback
+	}
+	maxDelay := q.config.Queue.MaxRetryDelay
+	if maxDelay == 0 {
+		maxDelay = 1 * time.Second // Default fallback
+	}
+	totalTimeout := q.config.Queue.PublishTimeout
+	if totalTimeout == 0 {
+		totalTimeout = 5 * time.Second // Default fallback
+	}
 	startTime := time.Now()
 
 	for {
@@ -225,7 +234,7 @@ func (q *Queue) processMessage(ctx context.Context, msg *Message) {
 			maxWorkers := delivery.GetMaxWorkers(q.config.Delivery.Local.MaxWorkers, len(localRecipients))
 			result := delivery.DeliverWithWorkers(ctx, localRecipients, maxWorkers, delivery.RecipientLocal,
 				func(ctx context.Context, recipient string) error {
-					return delivery.DeliverToLocalUser(ctx, msg, messagePath, recipient)
+					return delivery.DeliverToLocalUser(ctx, msg, messagePath, recipient, &q.config.Delivery.Local)
 				})
 			resultChan <- result
 		}()

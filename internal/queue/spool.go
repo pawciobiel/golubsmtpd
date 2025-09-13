@@ -17,7 +17,7 @@ import (
 func InitializeSpoolDirectories(spoolDir string) error {
 	for _, state := range GetRequiredSpoolDirectories() {
 		dir := filepath.Join(spoolDir, string(state))
-		if err := os.MkdirAll(dir, 0700); err != nil {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return fmt.Errorf("failed to create spool directory %s: %w", dir, err)
 		}
 	}
@@ -52,7 +52,7 @@ func StreamEmailContent(ctx context.Context, cfg *config.Config, message *Messag
 	}
 
 	// Create temporary file with secure permissions (0600 = rw-------)
-	file, err := os.OpenFile(tempFile, os.O_CREATE|os.O_RDWR|os.O_EXCL, 0600)
+	file, err := os.OpenFile(tempFile, os.O_CREATE|os.O_RDWR|os.O_EXCL, 0o600)
 	if err != nil {
 		return 0, fmt.Errorf("failed to create temporary file %s: %w", tempFile, err)
 	}

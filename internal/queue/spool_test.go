@@ -226,7 +226,7 @@ func TestInitializeSpoolDirectories(t *testing.T) {
 			continue
 		}
 
-		if info.Mode().Perm() != 0700 {
+		if info.Mode().Perm() != 0o700 {
 			t.Errorf("Directory %s has wrong permissions. Expected: 0700, Got: %o", dir, info.Mode().Perm())
 		}
 	}

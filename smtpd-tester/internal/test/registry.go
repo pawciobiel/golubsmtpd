@@ -54,7 +54,7 @@ func RunTest(ctx context.Context, testName string, config *client.Config, logger
 	if err != nil {
 		return err
 	}
-	
+
 	logger.Info("Running test", "name", testInfo.Name, "description", testInfo.Description)
 	return testInfo.Func(ctx, config, logger)
 }

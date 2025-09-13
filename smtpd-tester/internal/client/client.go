@@ -77,7 +77,7 @@ func New(config *Config, logger *slog.Logger) *Client {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	
+
 	return &Client{
 		config: config,
 		logger: logger,
@@ -113,7 +113,7 @@ Random data: %x
 Test complete.`, id, time.Now().Format(time.RFC3339), randBytes)
 		}
 	}
-	
+
 	return &Message{
 		ID:        id,
 		From:      c.config.From,
@@ -126,11 +126,11 @@ Test complete.`, id, time.Now().Format(time.RFC3339), randBytes)
 
 func (c *Client) SendMessage(ctx context.Context, msg *Message) error {
 	addr := fmt.Sprintf("%s:%d", c.config.Host, c.config.Port)
-	
+
 	// Use strings.Builder for efficient message construction
 	var builder strings.Builder
 	builder.Grow(len(msg.Subject) + len(msg.From) + len(msg.To) + len(msg.Body) + 200)
-	
+
 	builder.WriteString("Subject: ")
 	builder.WriteString(msg.Subject)
 	builder.WriteString("\r\nFrom: ")
@@ -141,22 +141,22 @@ func (c *Client) SendMessage(ctx context.Context, msg *Message) error {
 	builder.WriteString(fmt.Sprintf("%d-%d", msg.ID, time.Now().UnixNano()))
 	builder.WriteString("@example.com>\r\n\r\n")
 	builder.WriteString(msg.Body)
-	
+
 	messageBody := builder.String()
-	
+
 	// Setup authentication if provided
 	var auth smtp.Auth
 	if c.config.User != "" && c.config.Password != "" {
 		auth = smtp.PlainAuth("", c.config.User, c.config.Password, c.config.Host)
 	}
-	
+
 	// Use context with timeout for the entire operation
 	timeoutCtx, cancel := context.WithTimeout(ctx, c.config.Timeout)
 	defer cancel()
-	
+
 	// Channel to capture the result of smtp.SendMail
 	done := make(chan error, 1)
-	
+
 	go func() {
 		err := smtp.SendMail(
 			addr,
@@ -167,7 +167,7 @@ func (c *Client) SendMessage(ctx context.Context, msg *Message) error {
 		)
 		done <- err
 	}()
-	
+
 	select {
 	case <-timeoutCtx.Done():
 		return fmt.Errorf("timeout sending message %d: %w", msg.ID, timeoutCtx.Err())
@@ -180,11 +180,11 @@ func (c *Client) SendMessage(ctx context.Context, msg *Message) error {
 }
 
 type SendOptions struct {
-	Messages    int
-	Workers     int
-	CustomBody  string
-	OnProgress  func(processed, total int64, rate float64)
-	OnMessage   func(msgID int, success bool, err error, duration time.Duration)
+	Messages   int
+	Workers    int
+	CustomBody string
+	OnProgress func(processed, total int64, rate float64)
+	OnMessage  func(msgID int, success bool, err error, duration time.Duration)
 }
 
 func (c *Client) SendMessages(ctx context.Context, opts SendOptions) error {
@@ -194,15 +194,15 @@ func (c *Client) SendMessages(ctx context.Context, opts SendOptions) error {
 	if opts.Workers < 1 {
 		opts.Workers = 1
 	}
-	
+
 	c.stats.Reset()
 	c.stats.Total = int64(opts.Messages)
-	
+
 	mode := "sequential"
 	if opts.Workers > 1 {
 		mode = "concurrent"
 	}
-	
+
 	c.logger.Info("Starting SMTP test",
 		"messages", opts.Messages,
 		"workers", opts.Workers,
@@ -210,12 +210,12 @@ func (c *Client) SendMessages(ctx context.Context, opts SendOptions) error {
 		"recipients", len(c.config.Recipients),
 		"target", fmt.Sprintf("%s:%d", c.config.Host, c.config.Port),
 	)
-	
+
 	// Semaphore channel pattern from go-idioms
 	type token struct{}
 	sem := make(chan token, opts.Workers)
 	var wg sync.WaitGroup
-	
+
 	// Progress reporter goroutine
 	if opts.OnProgress != nil {
 		progressCtx, cancelProgress := context.WithCancel(ctx)
@@ -224,7 +224,7 @@ func (c *Client) SendMessages(ctx context.Context, opts SendOptions) error {
 			defer wg.Done()
 			ticker := time.NewTicker(time.Second)
 			defer ticker.Stop()
-			
+
 			for {
 				select {
 				case <-progressCtx.Done():
@@ -239,13 +239,13 @@ func (c *Client) SendMessages(ctx context.Context, opts SendOptions) error {
 				}
 			}
 		}()
-		
+
 		// Ensure progress goroutine is cleaned up
 		defer func() {
 			cancelProgress()
 		}()
 	}
-	
+
 	// Send all messages using semaphore channel pattern
 	for i := 1; i <= opts.Messages; i++ {
 		sem <- token{} // Acquire semaphore
@@ -255,31 +255,31 @@ func (c *Client) SendMessages(ctx context.Context, opts SendOptions) error {
 				<-sem // Release semaphore
 				wg.Done()
 			}()
-			
+
 			msg := c.generateMessage(msgID, opts.CustomBody)
-			
+
 			start := time.Now()
 			err := c.SendMessage(ctx, msg)
 			duration := time.Since(start)
-			
+
 			success := err == nil
 			if success {
 				c.stats.AddSuccess()
 			} else {
 				c.stats.AddError()
 			}
-			
+
 			if opts.OnMessage != nil {
 				opts.OnMessage(msgID, success, err, duration)
 			}
-			
+
 			// Small delay between messages for sequential mode
 			if opts.Workers == 1 {
 				time.Sleep(100 * time.Millisecond)
 			}
 		}(i)
 	}
-	
+
 	wg.Wait()
 	return nil
 }
@@ -289,7 +289,7 @@ func (c *Client) PrintStats() {
 	success := c.stats.GetSuccess()
 	errors := c.stats.GetErrors()
 	total := c.stats.GetProcessed()
-	
+
 	fmt.Printf("\n=== Test Results ===\n")
 	fmt.Printf("Total messages: %d\n", c.stats.Total)
 	fmt.Printf("Processed: %d\n", total)

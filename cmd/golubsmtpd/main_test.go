@@ -47,7 +47,7 @@ func TestInitializeSpoolDirectoriesPermissions(t *testing.T) {
 			t.Fatalf("Failed to stat directory %s: %v", dir, err)
 		}
 
-		expectedPerm := os.FileMode(0700)
+		expectedPerm := os.FileMode(0o700)
 		actualPerm := info.Mode().Perm()
 		if actualPerm != expectedPerm {
 			t.Errorf("Directory %s has permissions %o, expected %o (secure permissions required for email data)",
@@ -79,7 +79,7 @@ func TestInitializeSpoolDirectoriesWithCustomPath(t *testing.T) {
 		}
 
 		// Verify secure permissions on custom path too
-		if info.Mode().Perm() != 0700 {
+		if info.Mode().Perm() != 0o700 {
 			t.Errorf("Custom path directory %s has insecure permissions %o", dir, info.Mode().Perm())
 		}
 	}
@@ -112,7 +112,7 @@ func TestInitializeSpoolDirectoriesIdempotent(t *testing.T) {
 			continue
 		}
 
-		if info.Mode().Perm() != 0700 {
+		if info.Mode().Perm() != 0o700 {
 			t.Errorf("Directory %s has wrong permissions after second call: %o", dir, info.Mode().Perm())
 		}
 	}
