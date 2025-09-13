@@ -22,11 +22,12 @@ const (
 )
 
 type Server struct {
-	config   *config.Config
-	logger   *slog.Logger
-	listener net.Listener
-	wg       sync.WaitGroup
-	shutdown chan struct{}
+	config       *config.Config
+	logger       *slog.Logger
+	listener     net.Listener
+	socketListen net.Listener
+	wg           sync.WaitGroup
+	shutdown     chan struct{}
 
 	// Security checkers
 	rdnsChecker  *security.RDNSChecker
@@ -70,6 +71,12 @@ func (srv *Server) Start(ctx context.Context) error {
 
 	srv.logger.Info("SMTP server started", "address", addr)
 
+	// Start Unix domain socket listener
+	if err := srv.startSocketListener(ctx); err != nil {
+		srv.listener.Close()
+		return fmt.Errorf("failed to start Unix domain socket listener: %w", err)
+	}
+
 	// Start accepting connections
 	srv.wg.Add(1)
 	go srv.acceptLoop(ctx)
@@ -83,6 +90,10 @@ func (srv *Server) Stop(ctx context.Context) error {
 
 	if srv.listener != nil {
 		srv.listener.Close()
+	}
+
+	if srv.socketListen != nil {
+		srv.socketListen.Close()
 	}
 
 	// Stop message queue first
@@ -249,9 +260,19 @@ func (srv *Server) handleConnection(ctx context.Context, conn net.Conn, clientIP
 		conn.SetWriteDeadline(time.Now().Add(srv.config.Server.WriteTimeout))
 	}
 
+	// Create connection context for TCP
+	connCtx := smtp.ConnectionContext{
+		Type:     smtp.ConnectionTypeTCP,
+		Port:     srv.config.Server.Port,
+		TLS:      false, // TODO: detect TLS state
+		ClientIP: clientIP,
+	}
+
+	// Create SMTP handler using factory
 	textprotoConn := textproto.NewConn(conn)
-	session := smtp.NewSession(srv.config, srv.logger, textprotoConn, clientIP, srv.authenticator, srv.queue)
-	if err := session.Handle(ctx); err != nil {
+	handler := smtp.NewSMTPHandler(connCtx, srv.config, srv.logger, textprotoConn, srv.authenticator, srv.queue)
+
+	if err := handler.Handle(ctx); err != nil {
 		srv.logger.Debug("SMTP session ended", "client_ip", clientIP, "error", err)
 	} else {
 		srv.logger.Debug("SMTP session completed successfully", "client_ip", clientIP)

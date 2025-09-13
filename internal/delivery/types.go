@@ -26,4 +26,5 @@ type DeliveryResult struct {
 type DeliveryOutcome struct {
 	Recipient string
 	Success   bool
+	Error     error
 }

@@ -3,6 +3,7 @@ package smtp
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/textproto"
 	"strings"
@@ -27,6 +28,9 @@ const (
 	StateClosed
 )
 
+// SessionHandlerFunc defines the function signature for session flow handlers
+type SessionHandlerFunc func(ctx context.Context, sess *Session) error
+
 // Session represents an SMTP session with a client
 type Session struct {
 	config         *config.Config
@@ -38,6 +42,13 @@ type Session struct {
 	emailValidator *EmailValidator
 	rcptValidator  *RcptValidator
 	queue          *queue.Queue
+
+	// Strategy interfaces for different behaviors
+	headerGenerator HeaderGenerator
+	senderValidator SenderValidator
+	dataHandler     DataHandler
+	sessionHandler  SessionHandlerFunc
+	connCtx         ConnectionContext
 
 	// Session state
 	state               SessionState
@@ -53,19 +64,36 @@ type Session struct {
 	dnsblResults []string
 }
 
-// NewSession creates a new SMTP session
-func NewSession(cfg *config.Config, logger *slog.Logger, textprotoConn *textproto.Conn, clientIP string, authenticator auth.Authenticator, q *queue.Queue) *Session {
+// NewSession creates a new SMTP session with strategies
+func NewSession(
+	cfg *config.Config,
+	logger *slog.Logger,
+	textprotoConn *textproto.Conn,
+	clientIP string,
+	authenticator auth.Authenticator,
+	q *queue.Queue,
+	headerGenerator HeaderGenerator,
+	senderValidator SenderValidator,
+	dataHandler DataHandler,
+	sessionHandler SessionHandlerFunc,
+	connCtx ConnectionContext,
+) *Session {
 	return &Session{
-		config:         cfg,
-		logger:         logger,
-		textproto:      textprotoConn,
-		clientIP:       clientIP,
-		hostname:       cfg.Server.Hostname,
-		authenticator:  authenticator,
-		emailValidator: NewEmailValidator(cfg),
-		rcptValidator:  NewRcptValidator(cfg, authenticator, logger),
-		queue:          q,
-		state:          StateConnected,
+		config:          cfg,
+		logger:          logger,
+		textproto:       textprotoConn,
+		clientIP:        clientIP,
+		hostname:        cfg.Server.Hostname,
+		authenticator:   authenticator,
+		emailValidator:  NewEmailValidator(cfg),
+		rcptValidator:   NewRcptValidator(cfg, authenticator, logger),
+		queue:           q,
+		headerGenerator: headerGenerator,
+		senderValidator: senderValidator,
+		dataHandler:     dataHandler,
+		sessionHandler:  sessionHandler,
+		connCtx:         connCtx,
+		state:           StateConnected,
 	}
 }
 
@@ -95,38 +123,8 @@ func (sess *Session) classifyDomain(domain string) delivery.RecipientType {
 
 // Handle processes the SMTP session
 func (sess *Session) Handle(ctx context.Context) error {
-	defer sess.textproto.Close()
-
-	sess.logger.Info("Starting SMTP session", "client_ip", sess.clientIP)
-
-	// Send greeting
-	if err := sess.sendGreeting(); err != nil {
-		return fmt.Errorf("failed to send greeting: %w", err)
-	}
-
-	// Process commands
-	for sess.state != StateClosed {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		line, err := sess.textproto.ReadLine()
-		if err != nil {
-			sess.logger.Debug("Error reading command", "error", err)
-			return err
-		}
-
-		sess.logger.Debug("Received command", "command", line, "client_ip", sess.clientIP)
-
-		if err := sess.processCommand(ctx, line); err != nil {
-			sess.logger.Error("Error processing command", "error", err, "command", line)
-			return err
-		}
-	}
-
-	return nil
+	// Delegate to session-specific handler function
+	return sess.sessionHandler(ctx, sess)
 }
 
 func (sess *Session) sendGreeting() error {
@@ -161,13 +159,13 @@ func (sess *Session) processCommand(ctx context.Context, line string) error {
 	case "EHLO":
 		return sess.handleEhlo(ctx, args)
 	case "AUTH":
-		return sess.handleAuth(ctx, args)
+		return sess.dataHandler.HandleAuth(ctx, args, sess)
 	case "MAIL":
-		return sess.handleMail(ctx, args)
+		return sess.dataHandler.HandleMail(ctx, args, sess)
 	case "RCPT":
 		return sess.handleRcpt(ctx, args)
 	case "DATA":
-		return sess.handleData(ctx, args)
+		return sess.dataHandler.HandleData(ctx, args, sess)
 	case "RSET":
 		return sess.handleRset(ctx, args)
 	case "NOOP":
@@ -457,8 +455,20 @@ func (sess *Session) handleData(ctx context.Context, args []string) error {
 		return err
 	}
 
+	// Generate headers for the message (overridden by session types)
+	headers := sess.generateHeaders()
+
+	// Create a reader that combines headers and message data
+	var messageReader io.Reader
+	if headers != "" {
+		headerReader := strings.NewReader(headers)
+		messageReader = io.MultiReader(headerReader, sess.textproto.R)
+	} else {
+		messageReader = sess.textproto.R
+	}
+
 	// Stream message data directly to storage
-	totalSize, err := queue.StreamEmailContent(ctx, sess.config, sess.currentMessage, sess.textproto.R)
+	totalSize, err := queue.StreamEmailContent(ctx, sess.config, sess.currentMessage, messageReader)
 	if err != nil {
 		sess.logger.Error("Error storing message data", "error", err, "client_ip", sess.clientIP)
 		return sess.writeResponse(Response(StatusLocalError, "Error storing message"))
@@ -515,4 +525,12 @@ func (sess *Session) resetSession() {
 func (sess *Session) writeResponse(response string) error {
 	sess.logger.Debug("Sending response", "response", response, "client_ip", sess.clientIP)
 	return sess.textproto.PrintfLine("%s", response)
+}
+
+// generateHeaders creates headers to be prepended to the message
+// Default implementation returns empty string (no headers added)
+// Session types override this to add appropriate headers
+func (sess *Session) generateHeaders() string {
+	sess.logger.Debug("Session.generateHeaders (default) called", "client_ip", sess.clientIP)
+	return ""
 }

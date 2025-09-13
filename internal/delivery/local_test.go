@@ -7,9 +7,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/pawciobiel/golubsmtpd/internal/config"
 	"github.com/pawciobiel/golubsmtpd/internal/types"
 )
 
@@ -22,16 +24,24 @@ func TestDeliverToLocalUser(t *testing.T) {
 	ts := newTestSetup(t, "test-local-delivery-"+strconv.FormatInt(time.Now().UnixNano(), 10))
 	recipient := currentUser.Username + "@localhost"
 
+	// Use centralized path for local delivery testing
+	testBasePath := filepath.Join(os.TempDir(), "golub-local-test")
+	defer os.RemoveAll(testBasePath)
+
+	testConfig := &config.LocalDeliveryConfig{
+		BaseDirPath: testBasePath,
+		MaxWorkers:  1,
+	}
+
 	// Count existing files before delivery
-	maildirBase := filepath.Join("/home", currentUser.Username, "Maildir")
+	maildirBase := filepath.Join(testBasePath, currentUser.Username, "Maildir")
 	newDir := filepath.Join(maildirBase, "new")
 
 	var beforeCount int
 	if files, err := os.ReadDir(newDir); err == nil {
 		beforeCount = len(files)
 	}
-
-	err = DeliverToLocalUser(context.Background(), ts.msg, ts.testMessagePath, recipient)
+	err = DeliverToLocalUser(context.Background(), ts.msg, ts.testMessagePath, recipient, testConfig)
 	if err != nil {
 		t.Fatalf("DeliverToLocalUser failed: %v", err)
 	}
@@ -68,21 +78,34 @@ func TestDeliverToLocalUser(t *testing.T) {
 }
 
 func TestDeliverToLocalUser_NonExistentUser(t *testing.T) {
+	// Create a test message file
+	ts := newTestSetup(t, "test-nonexistent")
+
 	msg := &types.Message{ID: "test", From: "test@example.com"}
 
-	// Note: User validation is now done during RCPT TO processing
-	// Local delivery assumes the user was already validated
-	// This test now checks that delivery fails gracefully when directory creation fails
-	err := DeliverToLocalUser(context.Background(), msg, "/tmp/test", "nonexistent@localhost")
-	if err == nil {
-		t.Fatal("Expected error for delivery to non-accessible directory")
+	// Use a directory with restrictive permissions to trigger permission error
+	restrictedDir := filepath.Join(os.TempDir(), "golub-restricted")
+	os.MkdirAll(restrictedDir, 0o000) // No permissions
+	defer os.RemoveAll(restrictedDir)
+
+	testConfig := &config.LocalDeliveryConfig{
+		BaseDirPath: restrictedDir,
+		MaxWorkers:  1,
 	}
-	if !strings.Contains(err.Error(), "failed to create Maildir structure") {
-		t.Errorf("Expected Maildir creation error, got: %v", err)
+	err := DeliverToLocalUser(context.Background(), msg, ts.testMessagePath, "nonexistent@localhost", testConfig)
+	if err == nil {
+		t.Fatal("Expected error for delivery to restricted directory")
+	}
+	// The error might be permission-related or Maildir creation-related
+	if !strings.Contains(err.Error(), "permissions") && !strings.Contains(err.Error(), "failed to create") {
+		t.Errorf("Expected permission or creation error, got: %v", err)
 	}
 }
 
 func TestDeliverToLocalUser_CancelledContext(t *testing.T) {
+	// Create a test message file
+	ts := newTestSetup(t, "test-cancelled")
+
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -92,7 +115,11 @@ func TestDeliverToLocalUser_CancelledContext(t *testing.T) {
 	}
 
 	msg := &types.Message{ID: "test", From: "test@example.com"}
-	err = DeliverToLocalUser(ctx, msg, "/tmp/test", currentUser.Username+"@localhost")
+	testConfig := &config.LocalDeliveryConfig{
+		BaseDirPath: filepath.Join(os.TempDir(), "golub-cancel-test"),
+		MaxWorkers:  1,
+	}
+	err = DeliverToLocalUser(ctx, msg, ts.testMessagePath, currentUser.Username+"@localhost", testConfig)
 
 	if err != context.Canceled {
 		t.Errorf("Expected context.Canceled, got: %v", err)
@@ -128,5 +155,58 @@ func TestGenerateUniqueFilename_DifferentMessages(t *testing.T) {
 	}
 	if err := validateMaildirFilename(filename2, messageID2); err != nil {
 		t.Errorf("Invalid filename for msg2: %v", err)
+	}
+}
+
+func TestIsPermissionError(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{
+			name:     "nil error",
+			err:      nil,
+			expected: false,
+		},
+		{
+			name:     "EACCES permission error via PathError",
+			err:      &os.PathError{Op: "mkdir", Path: "/tmp/test", Err: syscall.EACCES},
+			expected: true,
+		},
+		{
+			name:     "EPERM permission error via PathError",
+			err:      &os.PathError{Op: "create", Path: "/tmp/test", Err: syscall.EPERM},
+			expected: true,
+		},
+		{
+			name:     "direct EACCES error",
+			err:      syscall.EACCES,
+			expected: true,
+		},
+		{
+			name:     "direct EPERM error",
+			err:      syscall.EPERM,
+			expected: true,
+		},
+		{
+			name:     "ENOENT error (not permission)",
+			err:      &os.PathError{Op: "open", Path: "/tmp/test", Err: syscall.ENOENT},
+			expected: false,
+		},
+		{
+			name:     "other generic error",
+			err:      os.ErrNotExist,
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isPermissionError(tt.err)
+			if result != tt.expected {
+				t.Errorf("isPermissionError(%v) = %v, want %v", tt.err, result, tt.expected)
+			}
+		})
 	}
 }

@@ -28,7 +28,7 @@ func newTestSetup(t *testing.T, messageID string) *testSetup {
 	testContent := "Subject: Test Message\r\nFrom: test@example.com\r\n\r\nTest message content"
 	testMessagePath := filepath.Join(tempDir, "test_message.eml")
 
-	if err := os.WriteFile(testMessagePath, []byte(testContent), 0644); err != nil {
+	if err := os.WriteFile(testMessagePath, []byte(testContent), 0o644); err != nil {
 		t.Fatalf("Failed to create test message: %v", err)
 	}
 

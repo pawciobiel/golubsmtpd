@@ -5,8 +5,10 @@ import (
 )
 
 // Re-export types for compatibility
-type Message = types.Message
-type MessageState = types.MessageState
+type (
+	Message      = types.Message
+	MessageState = types.MessageState
+)
 
 const (
 	MessageStateIncoming   = types.MessageStateIncoming
@@ -16,5 +18,7 @@ const (
 )
 
 // Re-export functions
-var GenerateID = types.GenerateID
-var GetRequiredSpoolDirectories = types.GetRequiredSpoolDirectories
+var (
+	GenerateID                  = types.GenerateID
+	GetRequiredSpoolDirectories = types.GetRequiredSpoolDirectories
+)

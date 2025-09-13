@@ -17,9 +17,6 @@ server:
 tls:
   enabled: false
 
-maildir:
-  base_path: "./test-mail"
-
 auth:
   plugin_chain: ["memory"]
   plugins:
@@ -52,6 +49,7 @@ queue:
 delivery:
   local:
     max_workers: 10
+    base_dir_path: "./test-mail/localhost"
   virtual:
     base_dir_path: "./test-mail"
     max_workers: 10

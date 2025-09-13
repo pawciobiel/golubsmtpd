@@ -30,7 +30,7 @@ func main() {
 		listTests  = flag.Bool("list-tests", false, "List available tests")
 	)
 	flag.Parse()
-	
+
 	// Handle list-tests flag
 	if *listTests {
 		fmt.Println("Available tests:")
@@ -39,7 +39,7 @@ func main() {
 		}
 		os.Exit(0)
 	}
-	
+
 	// Check if we should run tests or manual mode
 	if *tests != "" {
 		// Run predefined tests
@@ -47,19 +47,19 @@ func main() {
 		for i, name := range testNames {
 			testNames[i] = strings.TrimSpace(name)
 		}
-		
+
 		recipientList := test.ParseRecipients(*recipients)
-		
+
 		// Setup logging
 		logLevel := slog.LevelInfo
 		if *verbose {
 			logLevel = slog.LevelDebug
 		}
-		
+
 		logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 			Level: logLevel,
 		}))
-		
+
 		config := &client.Config{
 			Host:       *host,
 			Port:       *port,
@@ -70,12 +70,12 @@ func main() {
 			Subject:    *subject,
 			Timeout:    *timeout,
 		}
-		
+
 		test.ValidateConfig(config)
-		
+
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		
+
 		for _, testName := range testNames {
 			if err := test.RunTest(ctx, testName, config, logger); err != nil {
 				logger.Error("Test failed", "test", testName, "error", err)
@@ -84,7 +84,7 @@ func main() {
 		}
 		return
 	}
-	
+
 	// Validate flags for manual mode
 	if *messages < 1 {
 		fmt.Fprintf(os.Stderr, "Error: messages must be >= 1\n")
@@ -97,19 +97,19 @@ func main() {
 	if *workers > 1000 {
 		fmt.Printf("Warning: Very high worker count may overwhelm the server\n")
 	}
-	
+
 	recipientList := test.ParseRecipients(*recipients)
-	
+
 	// Setup logging
 	logLevel := slog.LevelInfo
 	if *verbose {
 		logLevel = slog.LevelDebug
 	}
-	
+
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: logLevel,
 	}))
-	
+
 	config := &client.Config{
 		Host:       *host,
 		Port:       *port,
@@ -120,15 +120,15 @@ func main() {
 		Subject:    *subject,
 		Timeout:    *timeout,
 	}
-	
+
 	// Validate and set defaults
 	test.ValidateConfig(config)
-	
+
 	smtpClient := client.New(config, logger)
-	
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	
+
 	fmt.Printf("SMTP Test Client\n")
 	fmt.Printf("================\n")
 	fmt.Printf("Target: %s:%d\n", config.Host, config.Port)
@@ -146,7 +146,7 @@ func main() {
 	}
 	fmt.Printf("Timeout: %s\n", config.Timeout)
 	fmt.Printf("\n")
-	
+
 	// Setup callbacks
 	onProgress := func(processed, total int64, rate float64) {
 		logger.Info("Progress",
@@ -157,7 +157,7 @@ func main() {
 			"rate", fmt.Sprintf("%.1f msg/sec", rate),
 		)
 	}
-	
+
 	onMessage := func(msgID int, success bool, err error, duration time.Duration) {
 		if *workers == 1 {
 			if success {
@@ -173,18 +173,18 @@ func main() {
 			}
 		}
 	}
-	
+
 	opts := client.SendOptions{
 		Messages:   *messages,
 		Workers:    *workers,
 		OnProgress: onProgress,
 		OnMessage:  onMessage,
 	}
-	
+
 	if err := smtpClient.SendMessages(ctx, opts); err != nil {
 		logger.Error("Test failed", "error", err)
 		os.Exit(1)
 	}
-	
+
 	smtpClient.PrintStats()
 }

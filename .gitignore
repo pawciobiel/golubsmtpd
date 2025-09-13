@@ -1,4 +1,5 @@
 /golubsmtpd
+/sendmail
 /test-spool/
 /test-mail/
 /pprof/*.png

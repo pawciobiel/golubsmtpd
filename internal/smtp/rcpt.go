@@ -85,10 +85,10 @@ func (r *RcptValidator) IsVirtualUserEmailValid(ctx context.Context, email strin
 		r.logger.Debug("Virtual user cache hit", "email", email, "exists", cachedResult)
 		return cachedResult
 	}
-	
+
 	exists := r.authenticator.ValidateUser(ctx, email)
 	r.virtualCache.Put(email, exists)
-	
+
 	r.logger.Debug("Virtual user lookup", "email", email, "exists", exists)
 	return exists
 }

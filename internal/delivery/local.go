@@ -7,9 +7,11 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/pawciobiel/golubsmtpd/internal/auth"
+	"github.com/pawciobiel/golubsmtpd/internal/config"
 	"github.com/pawciobiel/golubsmtpd/internal/types"
 )
 
@@ -21,13 +23,14 @@ var GetLocalMaildirPath = func(email string) string {
 
 // DeliverToLocalUser handles delivery to a single local user
 // Note: recipient is already validated by RCPT TO system user validation
-func DeliverToLocalUser(ctx context.Context, msg *types.Message, messagePath, recipient string) error {
+func DeliverToLocalUser(ctx context.Context, msg *types.Message, messagePath, recipient string, cfg *config.LocalDeliveryConfig) error {
 	// Extract username for path calculation
 	username := auth.ExtractUsername(recipient)
 
-	// Calculate Maildir base path for local user
-	// Note: No user.Lookup() needed - already validated during RCPT TO
-	maildirBase := filepath.Join("/home", username, "Maildir")
+	// Calculate Maildir base path for local user using centralized directory
+	// This avoids permission issues by writing to controlled directory
+	// Future: cfg could contain maildir format preference (Maildir vs mdir, etc.)
+	maildirBase := filepath.Join(cfg.BaseDirPath, username, "Maildir")
 
 	// Perform the actual delivery
 	if err := deliverToMaildir(ctx, msg, messagePath, maildirBase, recipient); err != nil {
@@ -51,7 +54,11 @@ func createMaildirStructure(maildirPath string) error {
 	}
 
 	for _, dir := range dirs {
-		if err := os.MkdirAll(dir, 0700); err != nil {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			// Check if it's a permission error for better logging
+			if isPermissionError(err) {
+				return fmt.Errorf("insufficient permissions to create directory %s (consider using /var/mail approach): %w", dir, err)
+			}
 			return fmt.Errorf("failed to create directory %s: %w", dir, err)
 		}
 	}
@@ -78,6 +85,10 @@ func streamMessageToFile(ctx context.Context, sourcePath, destPath string) error
 	// Create destination file
 	dstFile, err := os.Create(destPath)
 	if err != nil {
+		// Check if it's a permission error for better logging
+		if isPermissionError(err) {
+			return fmt.Errorf("insufficient permissions to create file %s (check directory permissions or consider using /var/mail approach): %w", destPath, err)
+		}
 		return fmt.Errorf("failed to create destination file %s: %w", destPath, err)
 	}
 	defer dstFile.Close()
@@ -128,4 +139,25 @@ func generateUniqueFilename(messageID string) string {
 	timestamp := time.Now().Format("20060102T150405Z")
 	pid := os.Getpid()
 	return fmt.Sprintf("%s.%d.%s.%s", timestamp, pid, messageID, "golubsmtpd")
+}
+
+// isPermissionError checks if an error is related to insufficient permissions
+func isPermissionError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// Check for os.PathError which wraps syscall errors
+	if pathErr, ok := err.(*os.PathError); ok {
+		if errno, ok := pathErr.Err.(syscall.Errno); ok {
+			return errno == syscall.EACCES || errno == syscall.EPERM
+		}
+	}
+
+	// Check for direct syscall.Errno
+	if errno, ok := err.(syscall.Errno); ok {
+		return errno == syscall.EACCES || errno == syscall.EPERM
+	}
+
+	return false
 }

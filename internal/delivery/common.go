@@ -2,6 +2,7 @@ package delivery
 
 import (
 	"context"
+	"log/slog"
 )
 
 // DeliverFunc represents a function that delivers a message to a single recipient
@@ -42,7 +43,11 @@ func DeliverWithWorkers(
 			defer func() { <-sem }() // Release semaphore
 
 			err := deliverFunc(ctx, recipient)
-			resultChan <- DeliveryOutcome{Recipient: recipient, Success: err == nil}
+			resultChan <- DeliveryOutcome{
+				Recipient: recipient,
+				Success:   err == nil,
+				Error:     err,
+			}
 		}(recipient)
 	}
 
@@ -51,8 +56,15 @@ func DeliverWithWorkers(
 		outcome := <-resultChan
 		if outcome.Success {
 			result.Successful = append(result.Successful, outcome.Recipient)
+			slog.Debug("Delivery successful",
+				"recipient", outcome.Recipient,
+				"type", recipientType)
 		} else {
 			result.Failed = append(result.Failed, outcome.Recipient)
+			slog.Error("Delivery failed",
+				"recipient", outcome.Recipient,
+				"type", recipientType,
+				"error", outcome.Error)
 		}
 	}
 
