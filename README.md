@@ -13,6 +13,8 @@ This is a toy project - not fully functional just yet... WIP!
 - **Lock-free Design**: High-performance concurrent connection handling
 - **RFC Compliance**: Standards-compliant SMTP implementation
 - **Unified Queue System**: Single queue with parallel message processors and concurrent delivery
+- **Unix Domain Sockets**: Local socket support for trusted applications
+- **Sendmail Tool**: Command-line utility for sending messages via Unix socket
 - **High-Volume Support**: Handles local fanout (10K+ users) and external relay (100K+ recipients)
 - **Low-Latency Chat**: Ultra-fast delivery for real-time email communication
 
@@ -21,6 +23,7 @@ This is a toy project - not fully functional just yet... WIP!
 ### Build
 ```bash
 go build ./cmd/golubsmtpd
+go build ./cmd/sendmail
 ```
 
 ### Test
@@ -38,6 +41,18 @@ go test ./...
 echo -e "EHLO test.example.com\nQUIT" | nc 127.0.0.1 2525
 ```
 
+### Send Messages via Sendmail Tool
+```bash
+# Send a simple message
+echo "Hello World" | ./sendmail user@localhost
+
+# Send with custom sender
+echo "Test message" | ./sendmail -f sender@example.com user@localhost
+
+# Read recipients from message headers
+./sendmail -t < message.txt
+```
+
 ## Configuration
 
 The server uses YAML configuration with support for:
@@ -46,6 +61,7 @@ The server uses YAML configuration with support for:
 - **Email validation**: `["basic"]`, `["basic", "extended"]`, `["basic", "extended", "dns_mx"]`
 - **Security features**: rDNS lookup, DNSBL checking
 - **Connection limits**: Total and per-IP connection limits
+- **Unix domain sockets**: Local socket path and trusted users configuration
 - **Unified queue**: Single queue with semaphore-based concurrency control and parallel delivery
 - **Per-type processing**: Configurable processing characteristics per recipient type (local, virtual, relay, external) to support different delivery requirements for chat emails, local fanout, and bulk campaigns
 
@@ -386,9 +402,9 @@ queue:
 ## TODO
 
 ### Core Implementation (Priority 1)
-- **Unified Queue System**: Implement MessageProcessor with semaphore-based concurrency
-- **Message Storage**: File lifecycle management (`incoming/` → `processing/` → `delivered/`)
-- **Local Delivery**: Maildir implementation with concurrent user writes and LRU cache
+- ✅ **Unified Queue System**: MessageProcessor with semaphore-based concurrency
+- ✅ **Message Storage**: File lifecycle management (`incoming/` → `processing/` → `delivered/`)
+- ✅ **Local Delivery**: Maildir implementation with concurrent user writes and LRU cache (LDA pending)
 - **External Relay**: SMTP client with domain-based rate limiting and connection pooling
 
 ### Security & Performance (Priority 2)
