@@ -7,6 +7,7 @@ import (
 
 	"github.com/pawciobiel/golubsmtpd/internal/auth"
 	"github.com/pawciobiel/golubsmtpd/internal/config"
+	"github.com/pawciobiel/golubsmtpd/internal/logging"
 	"github.com/pawciobiel/golubsmtpd/internal/queue"
 )
 
@@ -60,26 +61,26 @@ type DataHandler interface {
 func NewSMTPHandler(
 	connCtx ConnectionContext,
 	cfg *config.Config,
-	logger *slog.Logger,
 	textproto *textproto.Conn,
-	authenticator auth.Authenticator,
-	queue *queue.Queue,
+	deps *Dependencies,
 ) SMTPHandler {
+	logger := logging.GetLogger()
+
 	// Create appropriate validator based on connection type
-	validator := createSenderValidator(connCtx, cfg, authenticator, logger)
+	validator := createSenderValidator(connCtx, cfg, deps.Authenticator, logger)
 
 	logger.Debug("Creating SMTP handler", "connection_type", connCtx.Type)
 
 	switch connCtx.Type {
 	case ConnectionTypeSocket:
 		logger.Debug("Creating socket session")
-		return NewSocketSession(connCtx.Credentials, cfg, logger, textproto, validator, authenticator, queue)
+		return NewSocketSession(connCtx.Credentials, cfg, textproto, validator, deps)
 	case ConnectionTypeTCP:
 		logger.Debug("Creating TCP session")
-		return NewTCPSession(connCtx, cfg, logger, textproto, validator, authenticator, queue)
+		return NewTCPSession(connCtx, cfg, textproto, validator, deps)
 	default:
 		logger.Error("Unknown connection type", "type", connCtx.Type)
-		return NewTCPSession(connCtx, cfg, logger, textproto, validator, authenticator, queue)
+		return NewTCPSession(connCtx, cfg, textproto, validator, deps)
 	}
 }
 

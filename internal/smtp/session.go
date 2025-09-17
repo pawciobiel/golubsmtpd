@@ -12,6 +12,7 @@ import (
 	"github.com/pawciobiel/golubsmtpd/internal/auth"
 	"github.com/pawciobiel/golubsmtpd/internal/config"
 	"github.com/pawciobiel/golubsmtpd/internal/delivery"
+	"github.com/pawciobiel/golubsmtpd/internal/logging"
 	"github.com/pawciobiel/golubsmtpd/internal/queue"
 )
 
@@ -67,11 +68,9 @@ type Session struct {
 // NewSession creates a new SMTP session with strategies
 func NewSession(
 	cfg *config.Config,
-	logger *slog.Logger,
 	textprotoConn *textproto.Conn,
 	clientIP string,
-	authenticator auth.Authenticator,
-	q *queue.Queue,
+	deps *Dependencies,
 	headerGenerator HeaderGenerator,
 	senderValidator SenderValidator,
 	dataHandler DataHandler,
@@ -80,14 +79,14 @@ func NewSession(
 ) *Session {
 	return &Session{
 		config:          cfg,
-		logger:          logger,
+		logger:          logging.GetLogger(),
 		textproto:       textprotoConn,
 		clientIP:        clientIP,
 		hostname:        cfg.Server.Hostname,
-		authenticator:   authenticator,
+		authenticator:   deps.Authenticator,
 		emailValidator:  NewEmailValidator(cfg),
-		rcptValidator:   NewRcptValidator(cfg, authenticator, logger),
-		queue:           q,
+		rcptValidator:   NewRcptValidator(cfg, deps.Authenticator, deps.LocalAliasesMaps),
+		queue:           deps.Queue,
 		headerGenerator: headerGenerator,
 		senderValidator: senderValidator,
 		dataHandler:     dataHandler,
@@ -399,20 +398,37 @@ func (sess *Session) handleRcpt(ctx context.Context, args []string) error {
 	// Handle based on domain type
 	switch domainType {
 	case delivery.RecipientLocal, delivery.RecipientVirtual:
-		// Validate recipient using unified validator
-		if !sess.rcptValidator.IsRecipientValid(ctx, emailAddr.Full, domainType) {
-			sess.logger.Debug("Recipient validation failed", "recipient", emailAddr.Full, "domain_type", domainType, "client_ip", sess.clientIP)
-			return sess.writeResponse(Response(StatusMailboxUnavailable, "User unknown"))
-		}
-
-		// Check for duplicates and add to appropriate map
 		if domainType == delivery.RecipientLocal {
-			if _, exists := sess.currentMessage.LocalRecipients[emailAddr.Full]; exists {
-				sess.logger.Debug("Duplicate recipient ignored", "recipient", emailAddr.Full, "domain_type", domainType, "client_ip", sess.clientIP)
-				return sess.writeResponse(Response(StatusOK, "Recipient accepted"))
+			// Handle local recipients with alias fallback
+			if sess.rcptValidator.IsRecipientValid(ctx, emailAddr.Full, domainType) {
+				// Direct user exists
+				if _, exists := sess.currentMessage.LocalRecipients[emailAddr.Full]; exists {
+					sess.logger.Debug("Duplicate recipient ignored", "recipient", emailAddr.Full, "domain_type", domainType, "client_ip", sess.clientIP)
+					return sess.writeResponse(Response(StatusOK, "Recipient accepted"))
+				}
+				sess.currentMessage.LocalRecipients[emailAddr.Full] = struct{}{}
+			} else {
+				// Try alias resolution
+				aliasRecipients := sess.rcptValidator.ResolveLocalAlias(emailAddr.Local)
+				if len(aliasRecipients) > 0 {
+					// Alias resolved - add all pre-validated expanded recipients
+					for _, expandedRecipient := range aliasRecipients {
+						if _, exists := sess.currentMessage.LocalRecipients[expandedRecipient]; !exists {
+							sess.currentMessage.LocalRecipients[expandedRecipient] = struct{}{}
+						}
+					}
+					sess.logger.Debug("Local alias resolved", "alias", emailAddr.Local, "recipients", aliasRecipients, "client_ip", sess.clientIP)
+				} else {
+					sess.logger.Debug("Recipient validation failed", "recipient", emailAddr.Full, "domain_type", domainType, "client_ip", sess.clientIP)
+					return sess.writeResponse(Response(StatusMailboxUnavailable, "User unknown"))
+				}
 			}
-			sess.currentMessage.LocalRecipients[emailAddr.Full] = struct{}{}
 		} else {
+			// Handle virtual recipients
+			if !sess.rcptValidator.IsRecipientValid(ctx, emailAddr.Full, domainType) {
+				sess.logger.Debug("Recipient validation failed", "recipient", emailAddr.Full, "domain_type", domainType, "client_ip", sess.clientIP)
+				return sess.writeResponse(Response(StatusMailboxUnavailable, "User unknown"))
+			}
 			if _, exists := sess.currentMessage.VirtualRecipients[emailAddr.Full]; exists {
 				sess.logger.Debug("Duplicate recipient ignored", "recipient", emailAddr.Full, "domain_type", domainType, "client_ip", sess.clientIP)
 				return sess.writeResponse(Response(StatusOK, "Recipient accepted"))

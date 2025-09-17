@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/subtle"
 	"fmt"
-	"log/slog"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -14,16 +13,14 @@ import (
 // FileAuthenticator implements file-based authentication with streaming reads
 type FileAuthenticator struct {
 	filePath     string
-	logger       *slog.Logger
 	authCount    int64 // authentication attempts (atomic)
 	successCount int64 // successful authentications (atomic)
 }
 
 // NewFileAuthenticator creates a new file-based authenticator
-func NewFileAuthenticator(ctx context.Context, filePath string, logger *slog.Logger) (*FileAuthenticator, error) {
+func NewFileAuthenticator(ctx context.Context, filePath string) (*FileAuthenticator, error) {
 	auth := &FileAuthenticator{
 		filePath: filePath,
-		logger:   logger,
 	}
 
 	// Check context before file operations
@@ -54,7 +51,7 @@ func (f *FileAuthenticator) Authenticate(ctx context.Context, username, password
 
 	file, err := os.Open(f.filePath)
 	if err != nil {
-		f.logger.Error("Failed to open auth file", "error", err)
+			log().Error("Failed to open auth file", "error", err)
 		return &AuthResult{
 			Success: false,
 			Error:   fmt.Errorf("authentication unavailable"),
@@ -99,27 +96,27 @@ func (f *FileAuthenticator) Authenticate(ctx context.Context, username, password
 			// Constant-time password comparison to prevent timing attacks
 			if subtle.ConstantTimeCompare([]byte(password), []byte(filePassword)) == 1 {
 				atomic.AddInt64(&f.successCount, 1)
-				f.logger.Info("Authentication successful", "username", username)
+				log().Info("Authentication successful", "username", username)
 				return &AuthResult{
 					Success:  true,
 					Username: username,
 				}
 			} else {
-				f.logger.Debug("Authentication failed: invalid password", "username", username)
+				log().Debug("Authentication failed: invalid password", "username", username)
 				return &AuthResult{Success: false}
 			}
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		f.logger.Error("Error reading auth file", "error", err)
+			log().Error("Error reading auth file", "error", err)
 		return &AuthResult{
 			Success: false,
 			Error:   fmt.Errorf("authentication error"),
 		}
 	}
 
-	f.logger.Debug("Authentication failed: user not found", "username", username)
+	log().Debug("Authentication failed: user not found", "username", username)
 	return &AuthResult{Success: false}
 }
 
@@ -127,7 +124,7 @@ func (f *FileAuthenticator) Authenticate(ctx context.Context, username, password
 func (f *FileAuthenticator) findUserInFile(ctx context.Context, email string, needPassword bool) (string, bool) {
 	file, err := os.Open(f.filePath)
 	if err != nil {
-		f.logger.Error("Failed to open auth file", "error", err)
+			log().Error("Failed to open auth file", "error", err)
 		return "", false
 	}
 	defer file.Close()
@@ -166,7 +163,7 @@ func (f *FileAuthenticator) findUserInFile(ctx context.Context, email string, ne
 	}
 
 	if err := scanner.Err(); err != nil {
-		f.logger.Error("Error reading auth file", "error", err)
+			log().Error("Error reading auth file", "error", err)
 		return "", false
 	}
 
@@ -181,9 +178,9 @@ func (f *FileAuthenticator) ValidateUser(ctx context.Context, email string) bool
 
 	_, found := f.findUserInFile(ctx, email, false)
 	if found {
-		f.logger.Debug("User validation successful", "email", email, "plugin", "file")
+		log().Debug("User validation successful", "email", email, "plugin", "file")
 	} else {
-		f.logger.Debug("User validation failed: user not found", "email", email, "plugin", "file")
+		log().Debug("User validation failed: user not found", "email", email, "plugin", "file")
 	}
 
 	return found
@@ -205,7 +202,7 @@ func (f *FileAuthenticator) GetStats() (attempts, successes int64) {
 }
 
 // NewFileAuthenticatorFromConfig creates a file authenticator from configuration
-func NewFileAuthenticatorFromConfig(ctx context.Context, config map[string]interface{}, logger *slog.Logger) (Authenticator, error) {
+func NewFileAuthenticatorFromConfig(ctx context.Context, config map[string]interface{}) (Authenticator, error) {
 	pathInterface, exists := config["users_file"]
 	if !exists {
 		return nil, fmt.Errorf("file plugin requires 'users_file' parameter")
@@ -216,5 +213,5 @@ func NewFileAuthenticatorFromConfig(ctx context.Context, config map[string]inter
 		return nil, fmt.Errorf("file plugin 'users_file' must be a string")
 	}
 
-	return NewFileAuthenticator(ctx, path, logger)
+	return NewFileAuthenticator(ctx, path)
 }

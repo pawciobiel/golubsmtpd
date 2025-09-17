@@ -3,13 +3,15 @@ package queue
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/pawciobiel/golubsmtpd/internal/config"
 	"github.com/pawciobiel/golubsmtpd/internal/delivery"
+	"github.com/pawciobiel/golubsmtpd/internal/logging"
 )
+
+var log = logging.GetLogger
 
 var (
 	ErrQueueFull   = errors.New("queue full")
@@ -18,7 +20,6 @@ var (
 
 type Queue struct {
 	messageQueue chan *Message
-	logger       *slog.Logger
 	config       *config.Config
 	sem          chan struct{} // Limits concurrent processors
 	processorWg  sync.WaitGroup
@@ -30,12 +31,11 @@ type Queue struct {
 	publisherWg     sync.WaitGroup     // Track active publishers
 }
 
-func NewQueue(ctx context.Context, config *config.Config, logger *slog.Logger) *Queue {
+func NewQueue(ctx context.Context, config *config.Config) *Queue {
 	publisherCtx, cancel := context.WithCancel(ctx) // cancel is a function
 
 	return &Queue{
 		messageQueue:    make(chan *Message, config.Queue.BufferSize),
-		logger:          logger,
 		config:          config,
 		sem:             make(chan struct{}, config.Queue.MaxConsumers),
 		processorWg:     sync.WaitGroup{},
@@ -47,20 +47,20 @@ func NewQueue(ctx context.Context, config *config.Config, logger *slog.Logger) *
 
 // StartConsumer starts the consumer loop in a goroutine (non-blocking)
 func (q *Queue) StartConsumer(ctx context.Context) {
-	q.logger.Debug("Starting message queue consumers")
+	log().Debug("Starting message queue consumers")
 	go func() {
 		defer close(q.consumerDone) // Signal when consumer loop exits
-		q.logger.Debug("Consumer loop started")
+		log().Debug("Consumer loop started")
 		for {
 			select {
 			case msg, ok := <-q.messageQueue:
 				if !ok {
 					// Channel closed, exit consumer loop
-					q.logger.Debug("Channel closed, exit consumer loop")
+				log().Debug("Channel closed, exit consumer loop")
 					return
 				}
 
-				q.logger.Debug("Message received, acquiring semaphore", "message_id", msg.ID)
+				log().Debug("Message received, acquiring semaphore", "message_id", msg.ID)
 				// Try to acquire semaphore - this will block if at capacity
 				q.sem <- struct{}{} // Acquire semaphore BEFORE spawning goroutine
 				q.processorWg.Go(func() {
@@ -70,7 +70,7 @@ func (q *Queue) StartConsumer(ctx context.Context) {
 
 			case <-ctx.Done():
 				// Context cancelled, exit consumer loop
-				q.logger.Debug("Context cancelled, exit consumer loop")
+				log().Debug("Context cancelled, exit consumer loop")
 				return
 			}
 		}
@@ -85,7 +85,7 @@ func (q *Queue) PublishMessage(ctx context.Context, msg *Message) error {
 	// Check if publishers are being shut down
 	select {
 	case <-q.publisherCtx.Done():
-		q.logger.Debug("Publisher context cancelled, rejecting message", "message_id", msg.ID)
+		log().Debug("Publisher context cancelled, rejecting message", "message_id", msg.ID)
 		return ErrQueueClosed
 	default:
 	}
@@ -93,10 +93,10 @@ func (q *Queue) PublishMessage(ctx context.Context, msg *Message) error {
 	// Try immediate publish first
 	select {
 	case q.messageQueue <- msg:
-		q.logger.Debug("Message published", "message_id", msg.ID)
+		log().Debug("Message published", "message_id", msg.ID)
 		return nil
 	case <-q.publisherCtx.Done():
-		q.logger.Debug("Publisher context cancelled, rejecting message", "message_id", msg.ID)
+		log().Debug("Publisher context cancelled, rejecting message", "message_id", msg.ID)
 		return ErrQueueClosed
 	default:
 		// Queue full, start retry logic
@@ -118,11 +118,11 @@ func (q *Queue) PublishMessage(ctx context.Context, msg *Message) error {
 	startTime := time.Now()
 
 	for {
-		q.logger.Warn("Queue full, retrying", "message_id", msg.ID, "retry_delay", retryDelay, "elapsed", time.Since(startTime))
+		log().Warn("Queue full, retrying", "message_id", msg.ID, "retry_delay", retryDelay, "elapsed", time.Since(startTime))
 
 		// Check if we've exceeded total timeout
 		if time.Since(startTime) >= totalTimeout {
-			q.logger.Error("Queue full timeout exceeded, rejecting message", "message_id", msg.ID, "total_wait", time.Since(startTime))
+			log().Error("Queue full timeout exceeded, rejecting message", "message_id", msg.ID, "total_wait", time.Since(startTime))
 			return ErrQueueFull
 		}
 
@@ -131,10 +131,10 @@ func (q *Queue) PublishMessage(ctx context.Context, msg *Message) error {
 		// Try to publish again
 		select {
 		case q.messageQueue <- msg:
-			q.logger.Info("Message published after retry", "message_id", msg.ID, "total_wait", time.Since(startTime))
+			log().Info("Message published after retry", "message_id", msg.ID, "total_wait", time.Since(startTime))
 			return nil
 		case <-q.publisherCtx.Done():
-			q.logger.Debug("Publisher context cancelled during retry", "message_id", msg.ID)
+			log().Debug("Publisher context cancelled during retry", "message_id", msg.ID)
 			return ErrQueueClosed
 		default:
 			// Still full, increase delay for next iteration
@@ -150,14 +150,14 @@ func (q *Queue) PublishMessage(ctx context.Context, msg *Message) error {
 
 // Stop coordinates shutdown: stop publishers → wait → close channel → wait for processors
 func (q *Queue) Stop(ctx context.Context) error {
-	q.logger.Info("Stopping message queue")
+	log().Info("Stopping message queue")
 
 	// Phase 1: Signal publishers to stop
-	q.logger.Debug("Signaling publishers to stop")
+	log().Debug("Signaling publishers to stop")
 	q.publisherCancel() // Call the stored cancel function
 
 	// Phase 2: Wait for all publishers to finish (BLOCKING with timeout)
-	q.logger.Debug("Waiting for publishers to finish")
+	log().Debug("Waiting for publishers to finish")
 	publisherDone := make(chan struct{})
 	go func() {
 		q.publisherWg.Wait()
@@ -166,22 +166,22 @@ func (q *Queue) Stop(ctx context.Context) error {
 
 	select {
 	case <-publisherDone:
-		q.logger.Debug("All publishers stopped")
+		log().Debug("All publishers stopped")
 	case <-ctx.Done():
-		q.logger.Warn("Publisher shutdown timeout - forcing channel close")
+		log().Warn("Publisher shutdown timeout - forcing channel close")
 		// Don't return here - continue with channel close
 	}
 
 	// Phase 3: Close channel (publishers should be done, or we're forcing it)
-	q.logger.Debug("Closing message queue channel")
+	log().Debug("Closing message queue channel")
 	close(q.messageQueue)
 
 	// Phase 4: Wait for consumer loop to exit
-	q.logger.Debug("Waiting for consumer loop to exit")
+	log().Debug("Waiting for consumer loop to exit")
 	<-q.consumerDone
 
 	// Phase 5: Wait for processors to finish
-	q.logger.Debug("Waiting for processors to finish")
+	log().Debug("Waiting for processors to finish")
 	done := make(chan struct{})
 	go func() {
 		q.processorWg.Wait()
@@ -190,21 +190,21 @@ func (q *Queue) Stop(ctx context.Context) error {
 
 	select {
 	case <-done:
-		q.logger.Info("Message queue stopped gracefully")
+		log().Info("Message queue stopped gracefully")
 		return nil
 	case <-ctx.Done():
-		q.logger.Warn("Processor shutdown timeout")
+		log().Warn("Processor shutdown timeout")
 		return ctx.Err()
 	}
 }
 
 func (q *Queue) processMessage(ctx context.Context, msg *Message) {
-	q.logger.Debug("Processing message", "message_id", msg.ID)
+	log().Debug("Processing message", "message_id", msg.ID)
 
 	// Move message from incoming to processing
 	spoolDir := q.config.Server.SpoolDir
 	if err := MoveMessage(spoolDir, msg, MessageStateIncoming, MessageStateProcessing); err != nil {
-		q.logger.Error("Failed to move message to processing", "message_id", msg.ID, "error", err)
+		log().Error("Failed to move message to processing", "message_id", msg.ID, "error", err)
 		return
 	}
 
@@ -268,11 +268,11 @@ func (q *Queue) processMessage(ctx context.Context, msg *Message) {
 
 		// Log delivery results
 		if len(result.Successful) > 0 {
-			q.logger.Info("Delivery successful", "message_id", msg.ID, "type", result.Type,
+			log().Info("Delivery successful", "message_id", msg.ID, "type", result.Type,
 				"successful_count", len(result.Successful), "recipients", result.Successful)
 		}
 		if len(result.Failed) > 0 {
-			q.logger.Warn("Delivery failed", "message_id", msg.ID, "type", result.Type,
+			log().Warn("Delivery failed", "message_id", msg.ID, "type", result.Type,
 				"failed_count", len(result.Failed), "recipients", result.Failed)
 		}
 	}
@@ -281,20 +281,20 @@ func (q *Queue) processMessage(ctx context.Context, msg *Message) {
 	var finalState MessageState
 	if totalFailed == 0 {
 		finalState = MessageStateDelivered
-		q.logger.Info("Message delivery completed successfully", "message_id", msg.ID,
+		log().Info("Message delivery completed successfully", "message_id", msg.ID,
 			"successful_count", totalSuccessful)
 	} else {
 		finalState = MessageStateFailed
-		q.logger.Error("Message delivery failed", "message_id", msg.ID,
+		log().Error("Message delivery failed", "message_id", msg.ID,
 			"successful_count", totalSuccessful, "failed_count", totalFailed)
 	}
 
 	// Move message to final state
 	if err := MoveMessage(spoolDir, msg, MessageStateProcessing, finalState); err != nil {
-		q.logger.Error("Failed to move message to final state", "message_id", msg.ID,
+		log().Error("Failed to move message to final state", "message_id", msg.ID,
 			"final_state", finalState, "error", err)
 		return
 	}
 
-	q.logger.Debug("Message processing completed", "message_id", msg.ID, "final_state", finalState)
+	log().Debug("Message processing completed", "message_id", msg.ID, "final_state", finalState)
 }

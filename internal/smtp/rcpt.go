@@ -2,32 +2,33 @@ package smtp
 
 import (
 	"context"
-	"log/slog"
 	"os/user"
 	"time"
 
+	"github.com/pawciobiel/golubsmtpd/internal/aliases"
 	"github.com/pawciobiel/golubsmtpd/internal/auth"
 	"github.com/pawciobiel/golubsmtpd/internal/config"
 	"github.com/pawciobiel/golubsmtpd/internal/delivery"
+	"github.com/pawciobiel/golubsmtpd/internal/logging"
 )
 
 // RcptValidator handles RCPT TO recipient validation
 type RcptValidator struct {
-	config        *config.Config
-	authenticator auth.Authenticator
-	systemCache   *LRUCache // Cache for system user lookups
-	virtualCache  *LRUCache // Cache for virtual user lookups
-	logger        *slog.Logger
+	config           *config.Config
+	authenticator    auth.Authenticator
+	systemCache      *LRUCache // Cache for system user lookups
+	virtualCache     *LRUCache // Cache for virtual user lookups
+	localAliasesMaps *aliases.LocalAliasesMaps
 }
 
 // NewRcptValidator creates a new RCPT TO validator
-func NewRcptValidator(cfg *config.Config, authenticator auth.Authenticator, logger *slog.Logger) *RcptValidator {
+func NewRcptValidator(cfg *config.Config, authenticator auth.Authenticator, localAliasesMaps *aliases.LocalAliasesMaps) *RcptValidator {
 	return &RcptValidator{
-		config:        cfg,
-		authenticator: authenticator,
-		systemCache:   NewLRUCache(cfg.Cache.SystemUsers.Capacity, cfg.Cache.SystemUsers.TTL),
-		virtualCache:  NewLRUCache(cfg.Cache.VirtualUsers.Capacity, cfg.Cache.VirtualUsers.TTL),
-		logger:        logger,
+		config:           cfg,
+		authenticator:    authenticator,
+		systemCache:      NewLRUCache(cfg.Cache.SystemUsers.Capacity, cfg.Cache.SystemUsers.TTL),
+		virtualCache:     NewLRUCache(cfg.Cache.VirtualUsers.Capacity, cfg.Cache.VirtualUsers.TTL),
+		localAliasesMaps: localAliasesMaps,
 	}
 }
 
@@ -43,7 +44,7 @@ func (r *RcptValidator) IsRecipientValid(ctx context.Context, recipient string, 
 	case delivery.RecipientExternal:
 		return false // External recipients not accepted
 	default:
-		r.logger.Warn("Unknown recipient type", "recipient", recipient, "type", domainType)
+		logging.GetLogger().Warn("Unknown recipient type", "recipient", recipient, "type", domainType)
 		return false
 	}
 }
@@ -54,7 +55,7 @@ func (r *RcptValidator) IsSystemUserEmailValid(ctx context.Context, email string
 
 	// Check cache first
 	if exists, found := r.systemCache.Get(username); found {
-		r.logger.Debug("System user cache hit", "username", username, "exists", exists)
+		logging.GetLogger().Debug("System user cache hit", "username", username, "exists", exists)
 		return exists
 	}
 
@@ -71,10 +72,10 @@ func (r *RcptValidator) IsSystemUserEmailValid(ctx context.Context, email string
 	select {
 	case exists := <-resultChan:
 		r.systemCache.Put(username, exists)
-		r.logger.Debug("System user lookup", "username", username, "exists", exists)
+		logging.GetLogger().Debug("System user lookup", "username", username, "exists", exists)
 		return exists
 	case <-lookupCtx.Done():
-		r.logger.Warn("System user lookup timeout", "username", username)
+		logging.GetLogger().Warn("System user lookup timeout", "username", username)
 		return false
 	}
 }
@@ -82,15 +83,23 @@ func (r *RcptValidator) IsSystemUserEmailValid(ctx context.Context, email string
 // IsVirtualUserEmailValid checks if email is valid using auth plugins
 func (r *RcptValidator) IsVirtualUserEmailValid(ctx context.Context, email string) bool {
 	if cachedResult, found := r.virtualCache.Get(email); found {
-		r.logger.Debug("Virtual user cache hit", "email", email, "exists", cachedResult)
+		logging.GetLogger().Debug("Virtual user cache hit", "email", email, "exists", cachedResult)
 		return cachedResult
 	}
 
 	exists := r.authenticator.ValidateUser(ctx, email)
 	r.virtualCache.Put(email, exists)
 
-	r.logger.Debug("Virtual user lookup", "email", email, "exists", exists)
+	logging.GetLogger().Debug("Virtual user lookup", "email", email, "exists", exists)
 	return exists
+}
+
+// ResolveLocalAlias resolves local aliases to actual recipients
+func (r *RcptValidator) ResolveLocalAlias(alias string) []string {
+	if r.localAliasesMaps == nil {
+		return nil
+	}
+	return r.localAliasesMaps.ResolveAlias(alias)
 }
 
 // Close cleans up resources

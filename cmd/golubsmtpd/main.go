@@ -3,12 +3,15 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/pawciobiel/golubsmtpd/internal/aliases"
 	"github.com/pawciobiel/golubsmtpd/internal/auth"
 	"github.com/pawciobiel/golubsmtpd/internal/config"
 	"github.com/pawciobiel/golubsmtpd/internal/logging"
@@ -17,6 +20,7 @@ import (
 )
 
 func main() {
+	var startupWG sync.WaitGroup
 	var configPath string
 	flag.StringVar(&configPath, "config", "", "Path to configuration file")
 	flag.Parse()
@@ -33,19 +37,46 @@ func main() {
 	}
 
 	// Setup logging
-	logger := logging.Setup(&cfg.Logging)
+	logging.InitLogging(&cfg.Logging)
+	logger := logging.GetLogger()
 	logger.Info("Starting golubsmtpd", "version", "dev")
 
 	// Create authenticator
 	ctx := context.Background()
-	authenticator, err := auth.CreateAuthenticator(ctx, &cfg.Auth, logger)
+	authenticator, err := auth.CreateAuthenticator(ctx, &cfg.Auth)
 	if err != nil {
 		log.Fatal("Failed to create authenticator:", err)
 	}
 	defer authenticator.Close()
 
+	// Initialize local aliases maps in parallel
+	var localAliasesMaps *aliases.LocalAliasesMaps
+	var aliasesLoadError error
+
+	startupWG.Go(func() {
+		fmt.Print("Loading local aliases maps... ")
+
+		localAliasesMaps = aliases.NewLocalAliasesMaps(cfg)
+		aliasesLoadError = localAliasesMaps.LoadAliasesMaps(ctx)
+
+		if aliasesLoadError != nil {
+			fmt.Println("FAILED")
+			logger.Warn("Failed to load local aliases maps", "error", aliasesLoadError)
+		} else {
+			fmt.Println("DONE")
+		}
+	})
+
+	// Wait for all startup tasks to complete
+	startupWG.Wait()
+
+	// Check for critical errors (aliases loading is non-critical)
+	if aliasesLoadError != nil {
+		logger.Warn("Server starting without local aliases support", "error", aliasesLoadError)
+	}
+
 	// Create server
-	srv := server.New(cfg, logger, authenticator)
+	srv := server.New(cfg, authenticator, localAliasesMaps)
 
 	// Start server
 	if err := srv.Start(ctx); err != nil {

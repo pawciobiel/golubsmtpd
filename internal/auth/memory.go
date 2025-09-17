@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/subtle"
 	"fmt"
-	"log/slog"
 	"sync/atomic"
 
 	"github.com/pawciobiel/golubsmtpd/internal/config"
@@ -12,14 +11,13 @@ import (
 
 // MemoryAuthenticator implements in-memory authentication
 type MemoryAuthenticator struct {
-	logger       *slog.Logger
 	users        map[string]string // username -> password
 	authCount    int64             // authentication attempts (atomic)
 	successCount int64             // successful authentications (atomic)
 }
 
 // NewMemoryAuthenticator creates a new in-memory authenticator
-func NewMemoryAuthenticator(ctx context.Context, users []config.UserConfig, logger *slog.Logger) (*MemoryAuthenticator, error) {
+func NewMemoryAuthenticator(ctx context.Context, users []config.UserConfig) (*MemoryAuthenticator, error) {
 	// Check context before processing
 	select {
 	case <-ctx.Done():
@@ -40,11 +38,10 @@ func NewMemoryAuthenticator(ctx context.Context, users []config.UserConfig, logg
 	}
 
 	auth := &MemoryAuthenticator{
-		logger: logger,
-		users:  userMap,
+		users: userMap,
 	}
 
-	logger.Info("Memory authenticator initialized", "user_count", len(users))
+	log().Info("Memory authenticator initialized", "user_count", len(users))
 	return auth, nil
 }
 
@@ -61,7 +58,7 @@ func (m *MemoryAuthenticator) Authenticate(ctx context.Context, username, passwo
 
 	storedPassword, exists := m.users[username]
 	if !exists {
-		m.logger.Debug("Authentication failed: user not found",
+		log().Debug("Authentication failed: user not found",
 			"username", username)
 		return &AuthResult{Success: false}
 	}
@@ -69,14 +66,14 @@ func (m *MemoryAuthenticator) Authenticate(ctx context.Context, username, passwo
 	// Constant-time password comparison to prevent timing attacks
 	if subtle.ConstantTimeCompare([]byte(password), []byte(storedPassword)) == 1 {
 		atomic.AddInt64(&m.successCount, 1)
-		m.logger.Info("Authentication successful", "username", username)
+		log().Info("Authentication successful", "username", username)
 		return &AuthResult{
 			Success:  true,
 			Username: username,
 		}
 	}
 
-	m.logger.Debug("Authentication failed: invalid password", "username", username)
+	log().Debug("Authentication failed: invalid password", "username", username)
 	return &AuthResult{Success: false}
 }
 
@@ -89,9 +86,9 @@ func (m *MemoryAuthenticator) ValidateUser(ctx context.Context, email string) bo
 	// Direct lookup using full email as username
 	_, exists := m.users[email]
 	if exists {
-		m.logger.Debug("User validation successful", "email", email, "plugin", "memory")
+		log().Debug("User validation successful", "email", email, "plugin", "memory")
 	} else {
-		m.logger.Debug("User validation failed: user not found", "email", email, "plugin", "memory")
+		log().Debug("User validation failed: user not found", "email", email, "plugin", "memory")
 	}
 
 	return exists
@@ -118,7 +115,7 @@ func (m *MemoryAuthenticator) GetUserCount() int {
 }
 
 // NewMemoryAuthenticatorFromConfig creates a memory authenticator from configuration
-func NewMemoryAuthenticatorFromConfig(ctx context.Context, config map[string]interface{}, logger *slog.Logger) (Authenticator, error) {
+func NewMemoryAuthenticatorFromConfig(ctx context.Context, config map[string]interface{}) (Authenticator, error) {
 	// Check context before processing
 	select {
 	case <-ctx.Done():
@@ -175,10 +172,9 @@ func NewMemoryAuthenticatorFromConfig(ctx context.Context, config map[string]int
 	}
 
 	auth := &MemoryAuthenticator{
-		logger: logger,
-		users:  userMap,
+		users: userMap,
 	}
 
-	logger.Info("Memory authenticator initialized", "user_count", len(userMap))
+	log().Info("Memory authenticator initialized", "user_count", len(userMap))
 	return auth, nil
 }

@@ -3,12 +3,10 @@ package smtp
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/textproto"
 
-	"github.com/pawciobiel/golubsmtpd/internal/auth"
 	"github.com/pawciobiel/golubsmtpd/internal/config"
-	"github.com/pawciobiel/golubsmtpd/internal/queue"
+	"github.com/pawciobiel/golubsmtpd/internal/logging"
 )
 
 // tcpSessionHandler handles the standard TCP SMTP session flow
@@ -51,18 +49,16 @@ func tcpSessionHandler(ctx context.Context, sess *Session) error {
 func NewTCPSession(
 	connCtx ConnectionContext,
 	cfg *config.Config,
-	logger *slog.Logger,
 	textproto *textproto.Conn,
 	validator SenderValidator,
-	authenticator auth.Authenticator,
-	queue *queue.Queue,
+	deps *Dependencies,
 ) SMTPHandler {
 	// Create TCP-specific strategies
 	headerGenerator := &TCPHeaderGenerator{}
 	dataHandler := &TCPDataHandler{}
 
 	// Create session with strategies and handler
-	return NewSession(cfg, logger, textproto, connCtx.ClientIP, authenticator, queue,
+	return NewSession(cfg, textproto, connCtx.ClientIP, deps,
 		headerGenerator, validator, dataHandler, tcpSessionHandler, connCtx)
 }
 
@@ -105,16 +101,14 @@ func socketSessionHandler(ctx context.Context, sess *Session) error {
 func NewSocketSession(
 	credentials *SocketCredentials,
 	cfg *config.Config,
-	logger *slog.Logger,
 	textproto *textproto.Conn,
 	validator SenderValidator,
-	authenticator auth.Authenticator,
-	queue *queue.Queue,
+	deps *Dependencies,
 ) SMTPHandler {
 	// Get username from UID
 	username, err := getUsernameFromUID(credentials.UID)
 	if err != nil {
-		logger.Error("Failed to get username from UID", "uid", credentials.UID, "error", err)
+		logging.GetLogger().Error("Failed to get username from UID", "uid", credentials.UID, "error", err)
 		username = fmt.Sprintf("uid-%d", credentials.UID)
 	}
 
@@ -130,7 +124,7 @@ func NewSocketSession(
 	}
 
 	// Create session with strategies and handler
-	session := NewSession(cfg, logger, textproto, "socket", authenticator, queue,
+	session := NewSession(cfg, textproto, "socket", deps,
 		headerGenerator, validator, dataHandler, socketSessionHandler, connCtx)
 
 	// Mark as already authenticated since socket connections are kernel-verified
