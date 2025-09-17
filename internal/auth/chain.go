@@ -3,23 +3,24 @@ package auth
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"strings"
 	"sync/atomic"
 
 	"github.com/pawciobiel/golubsmtpd/internal/config"
+	"github.com/pawciobiel/golubsmtpd/internal/logging"
 )
+
+var log = logging.GetLogger
 
 // AuthChain implements authentication using a chain of plugins
 type AuthChain struct {
 	plugins      []Authenticator
-	logger       *slog.Logger
 	authCount    int64 // authentication attempts (atomic)
 	successCount int64 // successful authentications (atomic)
 }
 
 // NewAuthChainFromConfig creates an authentication chain from configuration
-func NewAuthChainFromConfig(ctx context.Context, cfg *config.AuthConfig, logger *slog.Logger) (*AuthChain, error) {
+func NewAuthChainFromConfig(ctx context.Context, cfg *config.AuthConfig) (*AuthChain, error) {
 	// Check context before processing
 	select {
 	case <-ctx.Done():
@@ -54,7 +55,7 @@ func NewAuthChainFromConfig(ctx context.Context, cfg *config.AuthConfig, logger 
 			return nil, fmt.Errorf("unknown authentication plugin: %s", pluginName)
 		}
 
-		plugin, err := factory(ctx, pluginConfig, logger)
+		plugin, err := factory(ctx, pluginConfig)
 		if err != nil {
 			// Clean up already created plugins
 			for _, p := range plugins {
@@ -68,7 +69,6 @@ func NewAuthChainFromConfig(ctx context.Context, cfg *config.AuthConfig, logger 
 
 	chain := &AuthChain{
 		plugins: plugins,
-		logger:  logger,
 	}
 
 	pluginNames := make([]string, len(plugins))
@@ -76,7 +76,7 @@ func NewAuthChainFromConfig(ctx context.Context, cfg *config.AuthConfig, logger 
 		pluginNames[i] = plugin.Name()
 	}
 
-	logger.Info("Authentication chain initialized", "plugins", pluginNames, "count", len(plugins))
+	log().Info("Authentication chain initialized", "plugins", pluginNames, "count", len(plugins))
 	return chain, nil
 }
 
@@ -103,7 +103,7 @@ func (c *AuthChain) Authenticate(ctx context.Context, username, password string)
 		default:
 		}
 
-		c.logger.Debug("Attempting authentication",
+		log().Debug("Attempting authentication",
 			"username", username,
 			"plugin", plugin.Name())
 
@@ -111,7 +111,7 @@ func (c *AuthChain) Authenticate(ctx context.Context, username, password string)
 
 		if result.Success {
 			atomic.AddInt64(&c.successCount, 1)
-			c.logger.Info("Authentication successful",
+			log().Info("Authentication successful",
 				"username", username,
 				"plugin", plugin.Name())
 			return result
@@ -119,18 +119,18 @@ func (c *AuthChain) Authenticate(ctx context.Context, username, password string)
 
 		// Log failure but continue to next plugin
 		if result.Error != nil {
-			c.logger.Debug("Authentication plugin error",
+			log().Debug("Authentication plugin error",
 				"username", username,
 				"plugin", plugin.Name(),
 				"error", result.Error)
 		} else {
-			c.logger.Debug("Authentication failed",
+			log().Debug("Authentication failed",
 				"username", username,
 				"plugin", plugin.Name())
 		}
 	}
 
-	c.logger.Debug("Authentication failed: all plugins exhausted", "username", username)
+	log().Debug("Authentication failed: all plugins exhausted", "username", username)
 	return &AuthResult{Success: false}
 }
 
@@ -149,23 +149,23 @@ func (c *AuthChain) ValidateUser(ctx context.Context, email string) bool {
 		default:
 		}
 
-		c.logger.Debug("Attempting user validation",
+		log().Debug("Attempting user validation",
 			"email", email,
 			"plugin", plugin.Name())
 
 		if plugin.ValidateUser(ctx, email) {
-			c.logger.Debug("User validation successful",
+			log().Debug("User validation successful",
 				"email", email,
 				"plugin", plugin.Name())
 			return true
 		}
 
-		c.logger.Debug("User validation failed",
+		log().Debug("User validation failed",
 			"email", email,
 			"plugin", plugin.Name())
 	}
 
-	c.logger.Debug("User validation failed: all plugins exhausted", "email", email)
+	log().Debug("User validation failed: all plugins exhausted", "email", email)
 	return false
 }
 
@@ -183,7 +183,7 @@ func (c *AuthChain) Name() string {
 func (c *AuthChain) Close() error {
 	for _, plugin := range c.plugins {
 		if err := plugin.Close(); err != nil {
-			c.logger.Error("Error closing auth plugin",
+			log().Error("Error closing auth plugin",
 				"plugin", plugin.Name(),
 				"error", err)
 		}

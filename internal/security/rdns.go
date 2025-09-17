@@ -2,7 +2,6 @@ package security
 
 import (
 	"context"
-	"log/slog"
 	"net"
 	"sync/atomic"
 	"time"
@@ -13,7 +12,6 @@ import (
 // RDNSChecker performs reverse DNS lookups with caching
 type RDNSChecker struct {
 	config *config.ReverseDNSConfig
-	logger *slog.Logger
 
 	// Lock-free counters
 	lookupCount int64
@@ -29,10 +27,9 @@ type RDNSResult struct {
 }
 
 // NewRDNSChecker creates a new reverse DNS checker
-func NewRDNSChecker(cfg *config.ReverseDNSConfig, logger *slog.Logger) *RDNSChecker {
+func NewRDNSChecker(cfg *config.ReverseDNSConfig) *RDNSChecker {
 	return &RDNSChecker{
 		config: cfg,
-		logger: logger,
 	}
 }
 
@@ -60,7 +57,7 @@ func (r *RDNSChecker) LookupWithTimeout(ctx context.Context, ip string, timeout 
 		result.Error = err
 		result.Valid = !r.config.RejectOnFail
 
-		r.logger.Debug("Reverse DNS lookup failed",
+		log().Debug("Reverse DNS lookup failed",
 			"ip", ip,
 			"error", err,
 			"reject_on_fail", r.config.RejectOnFail)
@@ -72,7 +69,7 @@ func (r *RDNSChecker) LookupWithTimeout(ctx context.Context, ip string, timeout 
 		atomic.AddInt64(&r.failCount, 1)
 		result.Valid = !r.config.RejectOnFail
 
-		r.logger.Debug("No reverse DNS hostname found",
+		log().Debug("No reverse DNS hostname found",
 			"ip", ip,
 			"reject_on_fail", r.config.RejectOnFail)
 
@@ -84,7 +81,7 @@ func (r *RDNSChecker) LookupWithTimeout(ctx context.Context, ip string, timeout 
 	result.Hostname = hostname
 	result.Valid = true
 
-	r.logger.Debug("Reverse DNS lookup successful",
+	log().Debug("Reverse DNS lookup successful",
 		"ip", ip,
 		"hostname", hostname)
 

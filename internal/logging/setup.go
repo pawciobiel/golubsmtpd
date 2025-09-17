@@ -3,6 +3,7 @@ package logging
 import (
 	"log/slog"
 	"os"
+	"sync"
 
 	"github.com/pawciobiel/golubsmtpd/internal/config"
 )
@@ -38,4 +39,34 @@ func Setup(logConfig *config.LoggingConfig) *slog.Logger {
 	slog.SetDefault(logger)
 
 	return logger
+}
+
+var (
+	logger *slog.Logger
+	once   sync.Once
+)
+
+func InitLogging(logConfig *config.LoggingConfig) {
+	once.Do(func() {
+		logger = Setup(logConfig)
+	})
+}
+
+func GetLogger() *slog.Logger {
+	if logger == nil {
+		panic("logger not initialized. Call logging.InitLogging(cfg) first.")
+	}
+	return logger
+}
+
+func InitTestLogging() {
+	level := "error" // Quiet during tests by default
+	if os.Getenv("DEBUG") == "1" {
+		level = "debug"
+	}
+
+	logger = Setup(&config.LoggingConfig{
+		Level:  level,
+		Format: "text",
+	})
 }

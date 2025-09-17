@@ -18,7 +18,7 @@ import (
 func (srv *Server) startSocketListener(ctx context.Context) error {
 	socketPath := srv.config.Server.SocketPath
 	if socketPath == "" {
-		srv.logger.Info("Unix domain socket disabled (no socket_path configured)")
+		log().Info("Unix domain socket disabled (no socket_path configured)")
 		return nil
 	}
 
@@ -48,9 +48,9 @@ func (srv *Server) startSocketListener(ctx context.Context) error {
 	}
 
 	// Keep current ownership (don't force mail group)
-	srv.logger.Debug("Socket permissions set to 666 (all users can access)")
+	log().Debug("Socket permissions set to 666 (all users can access)")
 
-	srv.logger.Info("Unix domain socket listener started", "socket_path", socketPath)
+	log().Info("Unix domain socket listener started", "socket_path", socketPath)
 
 	// Start accepting socket connections
 	srv.wg.Add(1)
@@ -85,7 +85,7 @@ func (srv *Server) socketAcceptLoop(ctx context.Context) {
 			case <-srv.shutdown:
 				return
 			default:
-				srv.logger.Error("Failed to accept socket connection", "error", err)
+				log().Error("Failed to accept socket connection", "error", err)
 				continue
 			}
 		}
@@ -100,23 +100,23 @@ func (srv *Server) handleSocketConnection(ctx context.Context, conn net.Conn) {
 	defer srv.wg.Done()
 	defer conn.Close()
 
-	srv.logger.Debug("New socket connection accepted")
+	log().Debug("New socket connection accepted")
 
 	// Get peer credentials (UID, GID, PID) from Unix socket
 	credentials, err := srv.getSocketCredentials(conn)
 	if err != nil {
-		srv.logger.Error("Failed to get socket credentials", "error", err)
+		log().Error("Failed to get socket credentials", "error", err)
 		return
 	}
 
-	srv.logger.Debug("Socket connection credentials",
+	log().Debug("Socket connection credentials",
 		"uid", credentials.UID,
 		"gid", credentials.GID,
 		"pid", credentials.PID)
 
 	// Validate the connecting process
 	if !srv.isSocketConnectionValid(credentials) {
-		srv.logger.Warn("Socket connection validation failed")
+		log().Warn("Socket connection validation failed")
 		return
 	}
 
@@ -134,12 +134,12 @@ func (srv *Server) handleSocketConnection(ctx context.Context, conn net.Conn) {
 
 	// Create SMTP handler using factory
 	textprotoConn := textproto.NewConn(conn)
-	handler := smtp.NewSMTPHandler(connCtx, srv.config, srv.logger, textprotoConn, srv.authenticator, srv.queue)
+	handler := smtp.NewSMTPHandler(connCtx, srv.config, textprotoConn, srv.smtpDeps)
 
 	if err := handler.Handle(ctx); err != nil {
-		srv.logger.Debug("Socket SMTP session ended", "error", err)
+		log().Debug("Socket SMTP session ended", "error", err)
 	} else {
-		srv.logger.Debug("Socket SMTP session completed successfully")
+		log().Debug("Socket SMTP session completed successfully")
 	}
 }
 
@@ -184,13 +184,13 @@ func (srv *Server) isSocketConnectionValid(creds *SocketCredentials) bool {
 	// Check if user is in trusted users list
 	username, err := srv.getUsernameFromUID(creds.UID)
 	if err != nil {
-		srv.logger.Error("Failed to get username for UID", "uid", creds.UID, "error", err)
+		log().Error("Failed to get username for UID", "uid", creds.UID, "error", err)
 		return false
 	}
 
 	// For now, allow all users - sender validation will happen in SMTP session
 	// This allows regular users to connect, but they'll be restricted in MAIL FROM
-	srv.logger.Debug("Socket connection from user", "username", username, "uid", creds.UID)
+	log().Debug("Socket connection from user", "username", username, "uid", creds.UID)
 
 	return true
 }

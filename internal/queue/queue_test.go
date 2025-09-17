@@ -2,7 +2,6 @@ package queue
 
 import (
 	"context"
-	"log/slog"
 	"os"
 	"sync"
 	"testing"
@@ -10,13 +9,15 @@ import (
 	"time"
 
 	"github.com/pawciobiel/golubsmtpd/internal/config"
+	"github.com/pawciobiel/golubsmtpd/internal/logging"
 )
 
-func createTestLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelError, // Only show errors to keep test output clean
-	}))
+func TestMain(m *testing.M) {
+	logging.InitTestLogging()
+	code := m.Run()
+	os.Exit(code)
 }
+
 
 func createQueueTestConfig() *config.Config {
 	return &config.Config{
@@ -46,9 +47,8 @@ func TestQueue_BasicPublishAndConsume(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	logger := createTestLogger()
 	cfg := createQueueTestConfig()
-	queue := NewQueue(ctx, cfg, logger)
+	queue := NewQueue(ctx, cfg)
 
 	// Start consumers
 	queue.StartConsumer(ctx)
@@ -75,10 +75,9 @@ func TestQueue_PublishToFullQueue(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		logger := createTestLogger()
-		// Create queue with buffer size 1 and no consumers
+			// Create queue with buffer size 1 and no consumers
 		cfg := &config.Config{Queue: config.QueueConfig{BufferSize: 1, MaxConsumers: 1}}
-		queue := NewQueue(ctx, cfg, logger)
+		queue := NewQueue(ctx, cfg)
 
 		// Publish first message (should succeed)
 		msg1 := createTestMessage()
@@ -113,9 +112,8 @@ func TestQueue_PublishAfterStop(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	logger := createTestLogger()
 	cfg := &config.Config{Queue: config.QueueConfig{BufferSize: 10, MaxConsumers: 1}}
-	queue := NewQueue(ctx, cfg, logger)
+	queue := NewQueue(ctx, cfg)
 
 	// Start and immediately stop
 	queue.StartConsumer(ctx)
@@ -136,9 +134,8 @@ func TestQueue_ConcurrentPublishing(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	logger := createTestLogger()
 	cfg := &config.Config{Queue: config.QueueConfig{BufferSize: 100, MaxConsumers: 5}}
-	queue := NewQueue(ctx, cfg, logger)
+	queue := NewQueue(ctx, cfg)
 
 	queue.StartConsumer(ctx)
 	defer queue.Stop(ctx)
@@ -190,10 +187,9 @@ func TestQueue_SemaphoreLimit(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	logger := createTestLogger()
 	// Queue with buffer=10 but only 1 consumer (semaphore limit)
 	cfg := &config.Config{Queue: config.QueueConfig{BufferSize: 10, MaxConsumers: 1}}
-	queue := NewQueue(ctx, cfg, logger)
+	queue := NewQueue(ctx, cfg)
 
 	queue.StartConsumer(ctx)
 	defer queue.Stop(ctx)
@@ -218,9 +214,8 @@ func TestQueue_GracefulShutdown(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	logger := createTestLogger()
 	cfg := &config.Config{Queue: config.QueueConfig{BufferSize: 5, MaxConsumers: 2}}
-	queue := NewQueue(ctx, cfg, logger)
+	queue := NewQueue(ctx, cfg)
 
 	queue.StartConsumer(ctx)
 
@@ -250,9 +245,8 @@ func TestQueue_GracefulShutdown(t *testing.T) {
 func TestQueue_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	logger := createTestLogger()
 	cfg := &config.Config{Queue: config.QueueConfig{BufferSize: 5, MaxConsumers: 1}}
-	queue := NewQueue(ctx, cfg, logger)
+	queue := NewQueue(ctx, cfg)
 
 	queue.StartConsumer(ctx)
 
@@ -276,17 +270,13 @@ func TestQueue_ContextCancellation(t *testing.T) {
 
 func TestNewQueue(t *testing.T) {
 	ctx := context.Background()
-	logger := createTestLogger()
 
 	cfg := &config.Config{Queue: config.QueueConfig{BufferSize: 50, MaxConsumers: 3}}
-	queue := NewQueue(ctx, cfg, logger)
+	queue := NewQueue(ctx, cfg)
 	if queue == nil {
 		t.Fatal("NewQueue returned nil")
 	}
 
-	if queue.logger != logger {
-		t.Error("Logger not set correctly")
-	}
 
 	if cap(queue.messageQueue) != 50 {
 		t.Errorf("Message queue buffer size wrong. Expected: 50, Got: %d", cap(queue.messageQueue))

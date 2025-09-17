@@ -30,6 +30,7 @@ type ServerConfig struct {
 	RelayDomains        []string      `yaml:"relay_domains"`
 	SpoolDir            string        `yaml:"spool_dir"`
 	SocketPath          string        `yaml:"socket_path"`
+	LocalAliasesFilePath string       `yaml:"local_aliases_file_path"`
 	TrustedUsers        []string      `yaml:"trusted_users"`
 }
 
@@ -127,6 +128,7 @@ func DefaultConfig() *Config {
 			RelayDomains:        []string{},                 // No relay by default
 			SpoolDir:            "/var/spool/golubsmtpd",
 			SocketPath:          "/var/run/golubsmtpd/golubsmtpd.sock",
+			LocalAliasesFilePath: "/etc/aliases",
 			TrustedUsers:        []string{"root", "mail", "daemon"},
 		},
 		TLS: TLSConfig{

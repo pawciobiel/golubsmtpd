@@ -2,13 +2,19 @@ package auth
 
 import (
 	"context"
-	"log/slog"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/pawciobiel/golubsmtpd/internal/config"
+	"github.com/pawciobiel/golubsmtpd/internal/logging"
 )
+
+func TestMain(m *testing.M) {
+	logging.InitTestLogging()
+	code := m.Run()
+	os.Exit(code)
+}
 
 func TestAuthChain_SinglePlugin(t *testing.T) {
 	cfg := &config.AuthConfig{
@@ -23,8 +29,7 @@ func TestAuthChain_SinglePlugin(t *testing.T) {
 		},
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	chain, err := NewAuthChainFromConfig(context.Background(), cfg, logger)
+	chain, err := NewAuthChainFromConfig(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("Failed to create auth chain: %v", err)
 	}
@@ -88,8 +93,7 @@ func TestAuthChain_MultiplePlugins(t *testing.T) {
 		},
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	chain, err := NewAuthChainFromConfig(context.Background(), cfg, logger)
+	chain, err := NewAuthChainFromConfig(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("Failed to create auth chain: %v", err)
 	}
@@ -134,8 +138,7 @@ func TestAuthChain_DuplicatePlugins(t *testing.T) {
 		},
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	_, err := NewAuthChainFromConfig(context.Background(), cfg, logger)
+	_, err := NewAuthChainFromConfig(context.Background(), cfg)
 	if err == nil {
 		t.Error("Expected error for duplicate plugins")
 	}
@@ -150,8 +153,7 @@ func TestAuthChain_MissingPluginConfig(t *testing.T) {
 		Plugins:     map[string]map[string]interface{}{}, // No plugin config
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	_, err := NewAuthChainFromConfig(context.Background(), cfg, logger)
+	_, err := NewAuthChainFromConfig(context.Background(), cfg)
 	if err == nil {
 		t.Error("Expected error for missing plugin config")
 	}
@@ -165,8 +167,7 @@ func TestAuthChain_UnknownPlugin(t *testing.T) {
 		},
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	_, err := NewAuthChainFromConfig(context.Background(), cfg, logger)
+	_, err := NewAuthChainFromConfig(context.Background(), cfg)
 	if err == nil {
 		t.Error("Expected error for unknown plugin")
 	}
@@ -178,8 +179,7 @@ func TestAuthChain_EmptyChain(t *testing.T) {
 		Plugins:     map[string]map[string]interface{}{},
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	_, err := NewAuthChainFromConfig(context.Background(), cfg, logger)
+	_, err := NewAuthChainFromConfig(context.Background(), cfg)
 	if err == nil {
 		t.Error("Expected error for empty plugin chain")
 	}
@@ -197,8 +197,7 @@ func TestAuthChain_ContextCancellation(t *testing.T) {
 		},
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	chain, err := NewAuthChainFromConfig(context.Background(), cfg, logger)
+	chain, err := NewAuthChainFromConfig(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("Failed to create auth chain: %v", err)
 	}
@@ -234,8 +233,7 @@ func TestAuthChain_Stats(t *testing.T) {
 		},
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	chain, err := NewAuthChainFromConfig(context.Background(), cfg, logger)
+	chain, err := NewAuthChainFromConfig(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("Failed to create auth chain: %v", err)
 	}
@@ -272,8 +270,7 @@ func TestAuthChain_PluginFailureDuringCreation(t *testing.T) {
 		},
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	_, err := NewAuthChainFromConfig(context.Background(), cfg, logger)
+	_, err := NewAuthChainFromConfig(context.Background(), cfg)
 	if err == nil {
 		t.Error("Expected error for invalid file path")
 	}
@@ -291,8 +288,7 @@ func TestAuthChain_WithTimeout(t *testing.T) {
 		},
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	chain, err := NewAuthChainFromConfig(context.Background(), cfg, logger)
+	chain, err := NewAuthChainFromConfig(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("Failed to create auth chain: %v", err)
 	}

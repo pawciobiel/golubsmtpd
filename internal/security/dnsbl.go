@@ -3,7 +3,6 @@ package security
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net"
 	"strconv"
 	"strings"
@@ -11,12 +10,14 @@ import (
 	"time"
 
 	"github.com/pawciobiel/golubsmtpd/internal/config"
+	"github.com/pawciobiel/golubsmtpd/internal/logging"
 )
+
+var log = logging.GetLogger
 
 // DNSBLChecker performs DNSBL (DNS Blacklist) checks
 type DNSBLChecker struct {
 	config *config.DNSBLConfig
-	logger *slog.Logger
 
 	// Lock-free counters
 	checkCount   int64
@@ -36,10 +37,9 @@ type DNSBLResult struct {
 }
 
 // NewDNSBLChecker creates a new DNSBL checker
-func NewDNSBLChecker(cfg *config.DNSBLConfig, logger *slog.Logger) *DNSBLChecker {
+func NewDNSBLChecker(cfg *config.DNSBLConfig) *DNSBLChecker {
 	checker := &DNSBLChecker{
 		config:       cfg,
-		logger:       logger,
 		providerHits: make(map[string]*int64),
 	}
 
@@ -71,7 +71,7 @@ func (d *DNSBLChecker) CheckIP(ctx context.Context, ip string) []*DNSBLResult {
 
 	// TODO: add IPv6 DNSBL support
 	if parsedIP.To4() == nil {
-		d.logger.Debug("Skipping DNSBL check for non-IPv4 address", "ip", ip)
+		log().Debug("Skipping DNSBL check for non-IPv4 address", "ip", ip)
 		return nil
 	}
 
@@ -165,7 +165,7 @@ func (d *DNSBLChecker) checkIPAgainstProvider(ctx context.Context, ip string, pr
 			Action:        d.config.Action,
 		}
 
-		d.logger.Warn("IP found in DNSBL",
+		log().Warn("IP found in DNSBL",
 			"ip", ip,
 			"provider", provider,
 			"response_codes", addrs,
@@ -227,7 +227,7 @@ func (d *DNSBLChecker) checkDomainAgainstProvider(ctx context.Context, domain st
 			Action:        d.config.Action,
 		}
 
-		d.logger.Warn("Domain found in DNSBL",
+		log().Warn("Domain found in DNSBL",
 			"domain", domain,
 			"provider", provider,
 			"response_codes", addrs,

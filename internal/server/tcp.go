@@ -3,19 +3,22 @@ package server
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net"
 	"net/textproto"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/pawciobiel/golubsmtpd/internal/aliases"
 	"github.com/pawciobiel/golubsmtpd/internal/auth"
 	"github.com/pawciobiel/golubsmtpd/internal/config"
+	"github.com/pawciobiel/golubsmtpd/internal/logging"
 	"github.com/pawciobiel/golubsmtpd/internal/queue"
 	"github.com/pawciobiel/golubsmtpd/internal/security"
 	"github.com/pawciobiel/golubsmtpd/internal/smtp"
 )
+
+var log = logging.GetLogger
 
 const (
 	UnknownClientIP = "unknown"
@@ -23,7 +26,6 @@ const (
 
 type Server struct {
 	config       *config.Config
-	logger       *slog.Logger
 	listener     net.Listener
 	socketListen net.Listener
 	wg           sync.WaitGroup
@@ -36,22 +38,33 @@ type Server struct {
 	// Authentication
 	authenticator auth.Authenticator
 
+	localAliasesMaps *aliases.LocalAliasesMaps
+
 	// Message queue
 	queue *queue.Queue
+
+	// SMTP dependencies
+	smtpDeps *smtp.Dependencies
 
 	// Lock-free connection tracking
 	totalConnections int64    // atomic counter
 	ipConnections    sync.Map // map[string]*int64 - IP -> connection count
 }
 
-func New(cfg *config.Config, logger *slog.Logger, authenticator auth.Authenticator) *Server {
+func New(cfg *config.Config, authenticator auth.Authenticator, localAliasesMaps *aliases.LocalAliasesMaps) *Server {
+	smtpDeps := &smtp.Dependencies{
+		Authenticator:    authenticator,
+		LocalAliasesMaps: localAliasesMaps,
+	}
+
 	return &Server{
-		config:        cfg,
-		logger:        logger,
-		shutdown:      make(chan struct{}),
-		rdnsChecker:   security.NewRDNSChecker(&cfg.Security.ReverseDNS, logger),
-		dnsblChecker:  security.NewDNSBLChecker(&cfg.Security.DNSBL, logger),
-		authenticator: authenticator,
+		config:           cfg,
+		shutdown:         make(chan struct{}),
+		rdnsChecker:      security.NewRDNSChecker(&cfg.Security.ReverseDNS),
+		dnsblChecker:     security.NewDNSBLChecker(&cfg.Security.DNSBL),
+		authenticator:    authenticator,
+		localAliasesMaps: localAliasesMaps,
+		smtpDeps:         smtpDeps,
 	}
 }
 
@@ -66,10 +79,13 @@ func (srv *Server) Start(ctx context.Context) error {
 	srv.listener = listener
 
 	// Initialize and start message queue
-	srv.queue = queue.NewQueue(ctx, srv.config, srv.logger)
+	srv.queue = queue.NewQueue(ctx, srv.config)
 	srv.queue.StartConsumer(ctx)
 
-	srv.logger.Info("SMTP server started", "address", addr)
+	// Update SMTP dependencies with queue
+	srv.smtpDeps.Queue = srv.queue
+
+	log().Info("SMTP server started", "address", addr)
 
 	// Start Unix domain socket listener
 	if err := srv.startSocketListener(ctx); err != nil {
@@ -85,7 +101,7 @@ func (srv *Server) Start(ctx context.Context) error {
 }
 
 func (srv *Server) Stop(ctx context.Context) error {
-	srv.logger.Info("Shutting down SMTP server")
+	log().Info("Shutting down SMTP server")
 	close(srv.shutdown)
 
 	if srv.listener != nil {
@@ -99,7 +115,7 @@ func (srv *Server) Stop(ctx context.Context) error {
 	// Stop message queue first
 	if srv.queue != nil {
 		if err := srv.queue.Stop(ctx); err != nil {
-			srv.logger.Error("Error stopping message queue", "error", err)
+			log().Error("Error stopping message queue", "error", err)
 		}
 	}
 
@@ -112,10 +128,10 @@ func (srv *Server) Stop(ctx context.Context) error {
 
 	select {
 	case <-done:
-		srv.logger.Info("SMTP server stopped gracefully")
+		log().Info("SMTP server stopped gracefully")
 		return nil
 	case <-ctx.Done():
-		srv.logger.Warn("SMTP server shutdown timeout")
+		log().Warn("SMTP server shutdown timeout")
 		return ctx.Err()
 	}
 }
@@ -136,7 +152,7 @@ func (srv *Server) acceptLoop(ctx context.Context) {
 			case <-srv.shutdown:
 				return
 			default:
-				srv.logger.Error("Failed to accept connection", "error", err)
+				log().Error("Failed to accept connection", "error", err)
 				continue
 			}
 		}
@@ -160,14 +176,14 @@ func (srv *Server) acceptLoop(ctx context.Context) {
 func (srv *Server) canAcceptConnection(clientIP string) bool {
 	// Reject connections with invalid IP addresses
 	if clientIP == UnknownClientIP {
-		srv.logger.Warn("Connection rejected: unable to determine client IP")
+		log().Warn("Connection rejected: unable to determine client IP")
 		return false
 	}
 
 	// Check total connection limit (atomic read)
 	totalConns := atomic.LoadInt64(&srv.totalConnections)
 	if totalConns >= int64(srv.config.Server.MaxConnections) {
-		srv.logger.Warn("Connection rejected: max connections reached",
+		log().Warn("Connection rejected: max connections reached",
 			"current", totalConns, "max", srv.config.Server.MaxConnections)
 		return false
 	}
@@ -175,7 +191,7 @@ func (srv *Server) canAcceptConnection(clientIP string) bool {
 	// Check per-IP connection limit (sync.Map)
 	ipConns := srv.getIPConnectionCount(clientIP)
 	if ipConns >= srv.config.Server.MaxConnectionsPerIP {
-		srv.logger.Warn("Connection rejected: max connections per IP reached",
+		log().Warn("Connection rejected: max connections per IP reached",
 			"ip", clientIP, "current", ipConns, "max", srv.config.Server.MaxConnectionsPerIP)
 		return false
 	}
@@ -219,7 +235,7 @@ func (srv *Server) decrementIPConnection(ip string) {
 func (srv *Server) performSecurityChecks(ctx context.Context, clientIP string) bool {
 	rdnsResult := srv.rdnsChecker.Lookup(ctx, clientIP)
 	if !rdnsResult.Valid {
-		srv.logger.Warn("rDNS check failed",
+		log().Warn("rDNS check failed",
 			"client_ip", clientIP,
 			"hostname", rdnsResult.Hostname,
 			"error", rdnsResult.Error)
@@ -229,7 +245,7 @@ func (srv *Server) performSecurityChecks(ctx context.Context, clientIP string) b
 	dnsblResults := srv.dnsblChecker.CheckIP(ctx, clientIP)
 	for _, result := range dnsblResults {
 		if result.Listed && srv.dnsblChecker.ShouldReject() {
-			srv.logger.Warn("IP listed in DNSBL, rejecting connection",
+			log().Warn("IP listed in DNSBL, rejecting connection",
 				"client_ip", clientIP,
 				"provider", result.Provider,
 				"response_codes", result.ResponseCodes)
@@ -245,10 +261,10 @@ func (srv *Server) handleConnection(ctx context.Context, conn net.Conn, clientIP
 	defer srv.untrackConnection(clientIP)
 	defer conn.Close()
 
-	srv.logger.Info("New connection accepted", "client_ip", clientIP)
+	log().Info("New connection accepted", "client_ip", clientIP)
 
 	if !srv.performSecurityChecks(ctx, clientIP) {
-		srv.logger.Warn("Connection rejected due to security checks", "client_ip", clientIP)
+		log().Warn("Connection rejected due to security checks", "client_ip", clientIP)
 		return
 	}
 
@@ -270,12 +286,12 @@ func (srv *Server) handleConnection(ctx context.Context, conn net.Conn, clientIP
 
 	// Create SMTP handler using factory
 	textprotoConn := textproto.NewConn(conn)
-	handler := smtp.NewSMTPHandler(connCtx, srv.config, srv.logger, textprotoConn, srv.authenticator, srv.queue)
+	handler := smtp.NewSMTPHandler(connCtx, srv.config, textprotoConn, srv.smtpDeps)
 
 	if err := handler.Handle(ctx); err != nil {
-		srv.logger.Debug("SMTP session ended", "client_ip", clientIP, "error", err)
+		log().Debug("SMTP session ended", "client_ip", clientIP, "error", err)
 	} else {
-		srv.logger.Debug("SMTP session completed successfully", "client_ip", clientIP)
+		log().Debug("SMTP session completed successfully", "client_ip", clientIP)
 	}
 }
 
