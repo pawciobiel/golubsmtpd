@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/pawciobiel/golubsmtpd/internal/aliases"
 	"github.com/pawciobiel/golubsmtpd/internal/auth"
 	"github.com/pawciobiel/golubsmtpd/internal/config"
@@ -95,25 +96,23 @@ webmaster: %s,%s
 	// Test alias resolution
 	aliases := validator.ResolveLocalAlias("postmaster")
 	expectedEmail := currentUser.Username + "@localhost"
-	if len(aliases) != 1 || aliases[0] != expectedEmail {
-		t.Errorf("Expected [%s], got %v", expectedEmail, aliases)
+	expected := []string{expectedEmail}
+	if diff := cmp.Diff(expected, aliases); diff != "" {
+		t.Errorf("Single alias resolution mismatch (-want +got):\n%s", diff)
 	}
 
 	// Test multiple recipients alias
 	aliases = validator.ResolveLocalAlias("webmaster")
-	if len(aliases) != 2 {
-		t.Errorf("Expected 2 recipients, got %d: %v", len(aliases), aliases)
-	}
-	for _, alias := range aliases {
-		if alias != expectedEmail {
-			t.Errorf("Expected all aliases to be %s, got %v", expectedEmail, aliases)
-		}
+	expected = []string{expectedEmail, expectedEmail}
+	if diff := cmp.Diff(expected, aliases); diff != "" {
+		t.Errorf("Multiple alias resolution mismatch (-want +got):\n%s", diff)
 	}
 
 	// Test non-existent alias
 	aliases = validator.ResolveLocalAlias("nonexistent")
-	if len(aliases) != 0 {
-		t.Errorf("Expected no aliases for nonexistent, got %v", aliases)
+	expected = nil
+	if diff := cmp.Diff(expected, aliases); diff != "" {
+		t.Errorf("Non-existent alias should return empty (-want +got):\n%s", diff)
 	}
 }
 
