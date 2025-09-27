@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/pawciobiel/golubsmtpd/internal/config"
 	"github.com/pawciobiel/golubsmtpd/internal/logging"
 )
@@ -56,8 +57,9 @@ func TestLoadAliasesMaps_EmptyPath(t *testing.T) {
 
 	// Should have no aliases
 	aliases := aliasesMaps.ResolveAlias("test")
-	if len(aliases) != 0 {
-		t.Errorf("Expected no aliases, got %v", aliases)
+	expected := []string(nil)
+	if diff := cmp.Diff(expected, aliases); diff != "" {
+		t.Errorf("Expected no aliases (-want +got):\n%s", diff)
 	}
 }
 
@@ -114,26 +116,23 @@ mailer-daemon: %s
 	// Test single recipient alias - expect @localhost to be appended
 	expectedSingle := currentUser + "@localhost"
 	aliases := aliasesMaps.ResolveAlias("postmaster")
-	if len(aliases) != 1 || aliases[0] != expectedSingle {
-		t.Errorf("Expected [%s], got %v", expectedSingle, aliases)
+	expected := []string{expectedSingle}
+	if diff := cmp.Diff(expected, aliases); diff != "" {
+		t.Errorf("Single recipient alias mismatch (-want +got):\n%s", diff)
 	}
 
 	// Test multiple recipients alias
 	aliases = aliasesMaps.ResolveAlias("webmaster")
-	if len(aliases) != 2 {
-		t.Errorf("Expected 2 recipients, got %d: %v", len(aliases), aliases)
-	}
-	// All should be the same user with @localhost
-	for _, alias := range aliases {
-		if alias != expectedSingle {
-			t.Errorf("Expected all aliases to be %s, got %v", expectedSingle, aliases)
-		}
+	expected = []string{expectedSingle, expectedSingle}
+	if diff := cmp.Diff(expected, aliases); diff != "" {
+		t.Errorf("Multiple recipients alias mismatch (-want +got):\n%s", diff)
 	}
 
 	// Test non-existent alias
 	aliases = aliasesMaps.ResolveAlias("nonexistent")
-	if len(aliases) != 0 {
-		t.Errorf("Expected no aliases for nonexistent, got %v", aliases)
+	expected = nil
+	if diff := cmp.Diff(expected, aliases); diff != "" {
+		t.Errorf("Non-existent alias should return empty (-want +got):\n%s", diff)
 	}
 }
 
@@ -181,13 +180,14 @@ webmaster: %s
 	// Valid aliases should still be loaded with @localhost appended
 	expectedEmail := currentUser + "@localhost"
 	aliases := aliasesMaps.ResolveAlias("postmaster")
-	if len(aliases) != 1 || aliases[0] != expectedEmail {
-		t.Errorf("Expected [%s], got %v", expectedEmail, aliases)
+	expected := []string{expectedEmail}
+	if diff := cmp.Diff(expected, aliases); diff != "" {
+		t.Errorf("Postmaster alias mismatch (-want +got):\n%s", diff)
 	}
 
 	aliases = aliasesMaps.ResolveAlias("webmaster")
-	if len(aliases) != 1 || aliases[0] != expectedEmail {
-		t.Errorf("Expected [%s], got %v", expectedEmail, aliases)
+	if diff := cmp.Diff(expected, aliases); diff != "" {
+		t.Errorf("Webmaster alias mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -224,8 +224,9 @@ func TestResolveAlias_NilMaps(t *testing.T) {
 	// Don't call LoadAliasesMaps
 
 	aliases := aliasesMaps.ResolveAlias("test")
-	if len(aliases) != 0 {
-		t.Errorf("Expected no aliases from unloaded maps, got %v", aliases)
+	expected := []string(nil)
+	if diff := cmp.Diff(expected, aliases); diff != "" {
+		t.Errorf("Expected no aliases from unloaded maps (-want +got):\n%s", diff)
 	}
 }
 
@@ -263,23 +264,25 @@ webmaster: %s
 
 	// Test exact case match should work
 	aliases := aliasesMaps.ResolveAlias("PostMaster")
-	if len(aliases) != 1 || aliases[0] != expectedEmail {
-		t.Errorf("Exact case lookup failed: expected [%s], got %v", expectedEmail, aliases)
+	expected := []string{expectedEmail}
+	if diff := cmp.Diff(expected, aliases); diff != "" {
+		t.Errorf("Exact case lookup failed (-want +got):\n%s", diff)
 	}
 
 	aliases = aliasesMaps.ResolveAlias("webmaster")
-	if len(aliases) != 1 || aliases[0] != expectedEmail {
-		t.Errorf("Exact case lookup failed: expected [%s], got %v", expectedEmail, aliases)
+	if diff := cmp.Diff(expected, aliases); diff != "" {
+		t.Errorf("Exact case lookup failed (-want +got):\n%s", diff)
 	}
 
 	// Test different cases should not match (case-sensitive)
 	aliases = aliasesMaps.ResolveAlias("postmaster")
-	if len(aliases) != 0 {
-		t.Errorf("Case-sensitive lookup should fail for different case: expected [], got %v", aliases)
+	expected = nil
+	if diff := cmp.Diff(expected, aliases); diff != "" {
+		t.Errorf("Case-sensitive lookup should fail for different case (-want +got):\n%s", diff)
 	}
 
 	aliases = aliasesMaps.ResolveAlias("POSTMASTER")
-	if len(aliases) != 0 {
-		t.Errorf("Case-sensitive lookup should fail for different case: expected [], got %v", aliases)
+	if diff := cmp.Diff(expected, aliases); diff != "" {
+		t.Errorf("Case-sensitive lookup should fail for different case (-want +got):\n%s", diff)
 	}
 }

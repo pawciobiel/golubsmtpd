@@ -28,8 +28,16 @@ go build ./cmd/sendmail
 
 ### Test
 ```bash
+# Standard testing
 go test ./...
+
+# Enhanced testing with colorful output and better diffs
+gotestsum --format testname
 ```
+
+#### Testing Tools
+- **gotestsum**: Colorful, readable test output - `go install gotest.tools/gotestsum@latest`
+- **go-cmp**: Clear diff comparisons in test failures - automatically included in test files
 
 ### Run
 ```bash
