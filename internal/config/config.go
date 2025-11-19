@@ -106,8 +106,9 @@ type UserCacheConfig struct {
 }
 
 type UserConfig struct {
-	Username string `yaml:"username"`
-	Password string `yaml:"password"`
+	Username string   `yaml:"username"`
+	Password string   `yaml:"password"`
+	Aliases  []string `yaml:"aliases,omitempty"`
 }
 
 func DefaultConfig() *Config {

@@ -11,9 +11,10 @@ import (
 
 // MemoryAuthenticator implements in-memory authentication
 type MemoryAuthenticator struct {
-	users        map[string]string // username -> password
-	authCount    int64             // authentication attempts (atomic)
-	successCount int64             // successful authentications (atomic)
+	users           map[string]string // username -> password
+	emailToUsername map[string]string // email alias -> username (for MAIL FROM validation)
+	authCount       int64             // authentication attempts (atomic)
+	successCount    int64             // successful authentications (atomic)
 }
 
 // NewMemoryAuthenticator creates a new in-memory authenticator
@@ -30,18 +31,42 @@ func NewMemoryAuthenticator(ctx context.Context, users []config.UserConfig) (*Me
 	}
 
 	userMap := make(map[string]string)
-	for _, user := range users {
+	emailToUsername := make(map[string]string)
+
+	for i, user := range users {
 		if user.Username == "" {
 			return nil, fmt.Errorf("username cannot be empty")
 		}
 		userMap[user.Username] = user.Password
+
+		for j, alias := range user.Aliases {
+			if alias == "" {
+				return nil, fmt.Errorf("user %d alias %d cannot be empty", i, j)
+			}
+
+			if existingUser, exists := emailToUsername[alias]; exists {
+				return nil, fmt.Errorf("alias '%s' already assigned to user '%s', cannot assign to '%s'", alias, existingUser, user.Username)
+			}
+
+			if _, exists := userMap[alias]; exists {
+				return nil, fmt.Errorf("alias '%s' conflicts with existing username", alias)
+			}
+
+			emailToUsername[alias] = user.Username
+		}
 	}
 
 	auth := &MemoryAuthenticator{
-		users: userMap,
+		users:           userMap,
+		emailToUsername: emailToUsername,
 	}
 
-	log().Info("Memory authenticator initialized", "user_count", len(users))
+	aliasCount := len(emailToUsername)
+	if aliasCount > 0 {
+		log().Info("Memory authenticator initialized", "user_count", len(users), "alias_count", aliasCount)
+	} else {
+		log().Info("Memory authenticator initialized", "user_count", len(users))
+	}
 	return auth, nil
 }
 
@@ -114,6 +139,26 @@ func (m *MemoryAuthenticator) GetUserCount() int {
 	return len(m.users)
 }
 
+// GetUsernameForEmail resolves an email address to its owning username
+// Returns the username and true if the email is a valid alias or primary username
+func (m *MemoryAuthenticator) GetUsernameForEmail(email string) (string, bool) {
+	if email == "" {
+		return "", false
+	}
+
+	// Check if email is a direct username
+	if _, exists := m.users[email]; exists {
+		return email, true
+	}
+
+	// Check if email is an alias
+	if username, exists := m.emailToUsername[email]; exists {
+		return username, true
+	}
+
+	return "", false
+}
+
 // NewMemoryAuthenticatorFromConfig creates a memory authenticator from configuration
 func NewMemoryAuthenticatorFromConfig(ctx context.Context, config map[string]interface{}) (Authenticator, error) {
 	// Check context before processing
@@ -138,6 +183,8 @@ func NewMemoryAuthenticatorFromConfig(ctx context.Context, config map[string]int
 	}
 
 	userMap := make(map[string]string)
+	emailToUsername := make(map[string]string)
+
 	for i, userInterface := range usersSlice {
 		userConfig, ok := userInterface.(map[string]interface{})
 		if !ok {
@@ -169,12 +216,49 @@ func NewMemoryAuthenticatorFromConfig(ctx context.Context, config map[string]int
 		}
 
 		userMap[username] = password
+
+		// Parse optional aliases
+		if aliasesInterface, exists := userConfig["aliases"]; exists {
+			aliasesSlice, ok := aliasesInterface.([]interface{})
+			if !ok {
+				return nil, fmt.Errorf("memory plugin user %d 'aliases' must be a list", i)
+			}
+
+			for j, aliasInterface := range aliasesSlice {
+				alias, ok := aliasInterface.(string)
+				if !ok {
+					return nil, fmt.Errorf("memory plugin user %d alias %d must be a string", i, j)
+				}
+
+				if alias == "" {
+					return nil, fmt.Errorf("memory plugin user %d alias %d cannot be empty", i, j)
+				}
+
+				// Check for duplicate aliases
+				if existingUser, exists := emailToUsername[alias]; exists {
+					return nil, fmt.Errorf("memory plugin alias '%s' already assigned to user '%s', cannot assign to '%s'", alias, existingUser, username)
+				}
+
+				// Check if alias conflicts with existing username
+				if _, exists := userMap[alias]; exists {
+					return nil, fmt.Errorf("memory plugin alias '%s' conflicts with existing username", alias)
+				}
+
+				emailToUsername[alias] = username
+			}
+		}
 	}
 
 	auth := &MemoryAuthenticator{
-		users: userMap,
+		users:           userMap,
+		emailToUsername: emailToUsername,
 	}
 
-	log().Info("Memory authenticator initialized", "user_count", len(userMap))
+	aliasCount := len(emailToUsername)
+	if aliasCount > 0 {
+		log().Info("Memory authenticator initialized", "user_count", len(userMap), "alias_count", aliasCount)
+	} else {
+		log().Info("Memory authenticator initialized", "user_count", len(userMap))
+	}
 	return auth, nil
 }
