@@ -132,9 +132,9 @@ func (srv *Server) handleSocketConnection(ctx context.Context, conn net.Conn) {
 		Credentials: smtpCreds,
 	}
 
-	// Create SMTP handler using factory
+	// Unix socket sessions never do STARTTLS — rawConn not used for upgrade
 	textprotoConn := textproto.NewConn(conn)
-	handler := smtp.NewSMTPHandler(connCtx, srv.config, textprotoConn, srv.smtpDeps)
+	handler := smtp.NewSMTPHandler(connCtx, srv.config, conn, textprotoConn, srv.smtpDeps)
 
 	if err := handler.Handle(ctx); err != nil {
 		log().Debug("Socket SMTP session ended", "error", err)

@@ -139,6 +139,21 @@ func (m *MemoryAuthenticator) GetUserCount() int {
 	return len(m.users)
 }
 
+// GetAllowedSenders returns all email addresses the username may send as.
+// Returns nil if the username is not known to this plugin.
+func (m *MemoryAuthenticator) GetAllowedSenders(username string) []string {
+	if _, exists := m.users[username]; !exists {
+		return nil
+	}
+	senders := []string{username}
+	for alias, owner := range m.emailToUsername {
+		if owner == username {
+			senders = append(senders, alias)
+		}
+	}
+	return senders
+}
+
 // GetUsernameForEmail resolves an email address to its owning username
 // Returns the username and true if the email is a valid alias or primary username
 func (m *MemoryAuthenticator) GetUsernameForEmail(email string) (string, bool) {

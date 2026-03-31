@@ -169,6 +169,16 @@ func (c *AuthChain) ValidateUser(ctx context.Context, email string) bool {
 	return false
 }
 
+// GetAllowedSenders walks the chain and returns senders from the first plugin that knows the user.
+func (c *AuthChain) GetAllowedSenders(username string) []string {
+	for _, plugin := range c.plugins {
+		if senders := plugin.GetAllowedSenders(username); senders != nil {
+			return senders
+		}
+	}
+	return nil
+}
+
 // Name returns the chain name with plugin list
 func (c *AuthChain) Name() string {
 	names := make([]string, len(c.plugins))

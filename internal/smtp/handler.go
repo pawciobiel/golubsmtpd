@@ -2,6 +2,8 @@ package smtp
 
 import (
 	"context"
+	"crypto/tls"
+	"net"
 	"log/slog"
 	"net/textproto"
 
@@ -19,13 +21,18 @@ const (
 	ConnectionTypeSocket ConnectionType = "socket"
 )
 
+// ListenerMode mirrors config.ListenerMode in the smtp package
+type ListenerMode = config.ListenerMode
+
 // ConnectionContext contains information about the connection
 type ConnectionContext struct {
 	Type        ConnectionType
 	Port        int
-	TLS         bool
+	Mode        ListenerMode  // plain, starttls, tls
+	TLS         bool          // true once TLS is active (implicit on 465, after STARTTLS on 587)
 	ClientIP    string
 	Credentials *SocketCredentials
+	TLSConfig   *tls.Config   // non-nil when STARTTLS upgrade is possible
 }
 
 // SocketCredentials represents Unix socket peer credentials
@@ -61,12 +68,12 @@ type DataHandler interface {
 func NewSMTPHandler(
 	connCtx ConnectionContext,
 	cfg *config.Config,
-	textproto *textproto.Conn,
+	rawConn net.Conn,
+	textprotoConn *textproto.Conn,
 	deps *Dependencies,
 ) SMTPHandler {
 	logger := logging.GetLogger()
 
-	// Create appropriate validator based on connection type
 	validator := createSenderValidator(connCtx, cfg, deps.Authenticator, logger)
 
 	logger.Debug("Creating SMTP handler", "connection_type", connCtx.Type)
@@ -74,13 +81,13 @@ func NewSMTPHandler(
 	switch connCtx.Type {
 	case ConnectionTypeSocket:
 		logger.Debug("Creating socket session")
-		return NewSocketSession(connCtx.Credentials, cfg, textproto, validator, deps)
+		return NewSocketSession(connCtx.Credentials, cfg, textprotoConn, validator, deps)
 	case ConnectionTypeTCP:
 		logger.Debug("Creating TCP session")
-		return NewTCPSession(connCtx, cfg, textproto, validator, deps)
+		return NewTCPSession(connCtx, cfg, rawConn, textprotoConn, validator, deps)
 	default:
 		logger.Error("Unknown connection type", "type", connCtx.Type)
-		return NewTCPSession(connCtx, cfg, textproto, validator, deps)
+		return NewTCPSession(connCtx, cfg, rawConn, textprotoConn, validator, deps)
 	}
 }
 
@@ -95,16 +102,18 @@ func createSenderValidator(
 	case ConnectionTypeSocket:
 		return NewSocketSenderValidator(connCtx.Credentials, cfg, logger)
 	case ConnectionTypeTCP:
-		// Different validation based on port
+		// Validator is selected by IANA-assigned port semantics:
+		//   25  = MTA-to-MTA relay (permissive sender, RCPT TO enforces relay policy)
+		//   587 = authenticated submission (STARTTLS + AUTH required)
+		//   465 = authenticated submission (implicit TLS + AUTH required)
+		//
+		// TODO: replace port-based inference with an explicit ListenerRole field
+		// (relay vs submission) in ListenerConfig so non-standard ports work correctly.
+		// Requires config changes and validation updates.
 		switch connCtx.Port {
-		case 587: // Submission port - requires authentication
-			return NewSubmissionSenderValidator(authenticator, cfg)
-		case 25: // MTA port - relay rules apply
-			return NewRelayValidator(cfg, logger)
-		case 465: // SMTPS port - requires authentication
+		case 587, 465:
 			return NewSubmissionSenderValidator(authenticator, cfg)
 		default:
-			logger.Warn("Unknown TCP port, using relay validator", "port", connCtx.Port)
 			return NewRelayValidator(cfg, logger)
 		}
 	default:

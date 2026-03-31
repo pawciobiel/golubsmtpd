@@ -8,6 +8,7 @@ const (
 	MessageStateProcessing MessageState = "processing" // Messages being processed for delivery
 	MessageStateFailed     MessageState = "failed"     // Failed delivery attempts
 	MessageStateDelivered  MessageState = "delivered"  // Successfully delivered (archive)
+	MessageStateRetry      MessageState = "retry"      // Outbound messages awaiting retry (metadata JSON files)
 )
 
 // String returns the string representation of MessageState
@@ -22,5 +23,6 @@ func GetRequiredSpoolDirectories() []MessageState {
 		MessageStateProcessing,
 		MessageStateFailed,
 		MessageStateDelivered,
+		MessageStateRetry,
 	}
 }

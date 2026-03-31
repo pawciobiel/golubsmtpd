@@ -2,9 +2,11 @@ package smtp
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/textproto"
 	"strings"
 	"time"
@@ -36,6 +38,7 @@ type SessionHandlerFunc func(ctx context.Context, sess *Session) error
 type Session struct {
 	config         *config.Config
 	logger         *slog.Logger
+	rawConn        net.Conn        // underlying TCP connection (needed for STARTTLS upgrade)
 	textproto      *textproto.Conn
 	clientIP       string
 	hostname       string
@@ -68,6 +71,7 @@ type Session struct {
 // NewSession creates a new SMTP session with strategies
 func NewSession(
 	cfg *config.Config,
+	rawConn net.Conn,
 	textprotoConn *textproto.Conn,
 	clientIP string,
 	deps *Dependencies,
@@ -80,6 +84,7 @@ func NewSession(
 	return &Session{
 		config:          cfg,
 		logger:          logging.GetLogger(),
+		rawConn:         rawConn,
 		textproto:       textprotoConn,
 		clientIP:        clientIP,
 		hostname:        cfg.Server.Hostname,
@@ -157,6 +162,8 @@ func (sess *Session) processCommand(ctx context.Context, line string) error {
 		return sess.handleHelo(ctx, args)
 	case "EHLO":
 		return sess.handleEhlo(ctx, args)
+	case "STARTTLS":
+		return sess.handleSTARTTLS(ctx)
 	case "AUTH":
 		return sess.dataHandler.HandleAuth(ctx, args, sess)
 	case "MAIL":
@@ -205,16 +212,24 @@ func (sess *Session) handleEhlo(ctx context.Context, args []string) error {
 	sess.clientHelloHostname = hostname
 	sess.state = StateGreeted
 
-	// Send multi-line response
-	responses := []string{
+	capabilities := []string{
 		fmt.Sprintf("250-%s Hello %s [%s]", sess.hostname, sess.clientHelloHostname, sess.clientIP),
-		"250-AUTH PLAIN LOGIN",
-		"250 HELP",
 	}
 
-	for i, resp := range responses {
-		if i == len(responses)-1 {
-			// Last line uses space instead of dash
+	// Advertise STARTTLS only on starttls-mode listeners and only if TLS not yet active
+	if sess.connCtx.Mode == config.ListenerModeSTARTTLS && !sess.connCtx.TLS {
+		capabilities = append(capabilities, "250-STARTTLS")
+	}
+
+	// Advertise AUTH only once TLS is active (or on implicit-TLS port)
+	if sess.connCtx.TLS || sess.connCtx.Mode == config.ListenerModePlain {
+		capabilities = append(capabilities, "250-AUTH PLAIN LOGIN")
+	}
+
+	capabilities = append(capabilities, "250 HELP")
+
+	for i, resp := range capabilities {
+		if i == len(capabilities)-1 {
 			resp = strings.Replace(resp, "250-", "250 ", 1)
 		}
 		if err := sess.writeResponse(resp); err != nil {
@@ -549,4 +564,45 @@ func (sess *Session) writeResponse(response string) error {
 func (sess *Session) generateHeaders() string {
 	sess.logger.Debug("Session.generateHeaders (default) called", "client_ip", sess.clientIP)
 	return ""
+}
+
+func (sess *Session) handleSTARTTLS(ctx context.Context) error {
+	if sess.connCtx.Mode != config.ListenerModeSTARTTLS {
+		return sess.writeResponse(Response(StatusCommandNotImpl, "STARTTLS not available on this port"))
+	}
+	if sess.connCtx.TLS {
+		return sess.writeResponse(Response(StatusBadSequence, "TLS already active"))
+	}
+	if sess.connCtx.TLSConfig == nil {
+		return sess.writeResponse(Response(StatusLocalError, "TLS not configured"))
+	}
+	if sess.state < StateGreeted {
+		return sess.writeResponse(Response(StatusBadSequence, "EHLO required before STARTTLS"))
+	}
+
+	if err := sess.writeResponse(Response(StatusReady, "Ready to start TLS")); err != nil {
+		return err
+	}
+
+	// Upgrade the raw TCP connection to TLS
+	tlsConn := tls.Server(sess.rawConn, sess.connCtx.TLSConfig)
+	if err := tlsConn.Handshake(); err != nil {
+		sess.logger.Warn("TLS handshake failed", "client_ip", sess.clientIP, "error", err)
+		return fmt.Errorf("TLS handshake failed: %w", err)
+	}
+
+	// Rebuild textproto on top of the TLS connection
+	sess.rawConn = tlsConn
+	sess.textproto = textproto.NewConn(tlsConn)
+	sess.connCtx.TLS = true
+
+	// RFC 3207: reset state after STARTTLS — client must re-EHLO
+	sess.state = StateConnected
+	sess.clientHelloHostname = ""
+	sess.authenticated = false
+	sess.username = ""
+	sess.currentMessage = nil
+
+	sess.logger.Info("STARTTLS upgrade successful", "client_ip", sess.clientIP)
+	return nil
 }

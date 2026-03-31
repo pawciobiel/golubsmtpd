@@ -14,10 +14,26 @@ type Config struct {
 	Cache    CacheConfig    `yaml:"cache"`
 }
 
+// ListenerMode defines how a port handles TLS
+type ListenerMode string
+
+const (
+	ListenerModePlain    ListenerMode = "plain"     // no TLS (port 25)
+	ListenerModeSTARTTLS ListenerMode = "starttls"  // plain + STARTTLS upgrade (port 587)
+	ListenerModeTLS      ListenerMode = "tls"       // implicit TLS (port 465)
+)
+
+// ListenerConfig defines a single TCP listener
+type ListenerConfig struct {
+	Port int          `yaml:"port"`
+	Mode ListenerMode `yaml:"mode"`
+}
+
 type ServerConfig struct {
-	Bind                string        `yaml:"bind"`
-	Port                int           `yaml:"port"`
-	Hostname            string        `yaml:"hostname"`
+	Bind                string           `yaml:"bind"`
+	Port                int              `yaml:"port"`      // legacy single-port (used if Listeners is empty)
+	Listeners           []ListenerConfig `yaml:"listeners"` // multi-port listeners
+	Hostname            string           `yaml:"hostname"`
 	MaxConnections      int           `yaml:"max_connections"`
 	MaxConnectionsPerIP int           `yaml:"max_connections_per_ip"`
 	MaxRecipients       int           `yaml:"max_recipients"`
@@ -81,8 +97,15 @@ type QueueConfig struct {
 }
 
 type DeliveryConfig struct {
-	Local   LocalDeliveryConfig   `yaml:"local"`
-	Virtual VirtualDeliveryConfig `yaml:"virtual"`
+	Local    LocalDeliveryConfig    `yaml:"local"`
+	Virtual  VirtualDeliveryConfig  `yaml:"virtual"`
+	Outbound OutboundDeliveryConfig `yaml:"outbound"`
+}
+
+type OutboundDeliveryConfig struct {
+	MaxWorkers  int           `yaml:"max_workers"`  // max concurrent outbound domain connections
+	RetryInterval time.Duration `yaml:"retry_interval"` // fixed interval between retry attempts for 4xx tempfails
+	RetryMaxAge   time.Duration `yaml:"retry_max_age"`  // give up retrying after this duration
 }
 
 type LocalDeliveryConfig struct {
@@ -114,8 +137,11 @@ type UserConfig struct {
 func DefaultConfig() *Config {
 	return &Config{
 		Server: ServerConfig{
-			Bind:                "127.0.0.1",
-			Port:                2525,
+			Bind: "127.0.0.1",
+			Port: 2525, // legacy fallback
+			Listeners: []ListenerConfig{
+				{Port: 2525, Mode: ListenerModePlain},
+			},
 			Hostname:            "localhost",
 			MaxConnections:      10000,
 			MaxConnectionsPerIP: 1000,
@@ -170,6 +196,11 @@ func DefaultConfig() *Config {
 		Delivery: DeliveryConfig{
 			Local: LocalDeliveryConfig{
 				MaxWorkers: 10,
+			},
+			Outbound: OutboundDeliveryConfig{
+				MaxWorkers:    10,
+				RetryInterval: 30 * time.Minute,
+				RetryMaxAge:   5 * 24 * time.Hour, // RFC 5321 §4.5.4.1 minimum; Postfix default is also 5 days
 			},
 			Virtual: VirtualDeliveryConfig{
 				BaseDirPath: "/var/mail/virtual",

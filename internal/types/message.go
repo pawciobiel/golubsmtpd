@@ -20,6 +20,9 @@ type Message struct {
 	ExternalRecipients  map[string]struct{}
 	TotalSize           int64
 	Created             time.Time
+	// RawBody is set for in-memory generated messages (e.g. DSN bounces).
+	// When non-empty the queue writes this directly to spool instead of reading from SMTP stream.
+	RawBody string
 }
 
 // TotalRecipients returns the total number of recipients across all types

@@ -104,19 +104,22 @@ func NewSubmissionSenderValidator(authenticator auth.Authenticator, cfg *config.
 }
 
 func (v *SubmissionSenderValidator) ValidateSender(sender string) error {
-	// Submission ports require authentication
 	if !v.authenticated {
 		return fmt.Errorf("authentication required for sender validation")
 	}
 
-	// Empty sender not allowed on submission ports
 	if sender == "" {
 		return fmt.Errorf("null sender not allowed on submission port")
 	}
 
-	// For now, authenticated users can send as anyone
-	// TODO: Add proper sender restrictions based on user permissions
-	return nil
+	allowed := v.authenticator.GetAllowedSenders(v.username)
+	for _, a := range allowed {
+		if strings.EqualFold(a, sender) {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("user %s not allowed to send as %s", v.username, sender)
 }
 
 func (v *SubmissionSenderValidator) IsAuthenticated() bool {

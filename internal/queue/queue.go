@@ -201,83 +201,91 @@ func (q *Queue) Stop(ctx context.Context) error {
 func (q *Queue) processMessage(ctx context.Context, msg *Message) {
 	log().Debug("Processing message", "message_id", msg.ID)
 
-	// Move message from incoming to processing
 	spoolDir := q.config.Server.SpoolDir
 	if err := MoveMessage(spoolDir, msg, MessageStateIncoming, MessageStateProcessing); err != nil {
 		log().Error("Failed to move message to processing", "message_id", msg.ID, "error", err)
 		return
 	}
 
-	// Get message file path for delivery
 	messagePath := GetMessagePath(spoolDir, msg, MessageStateProcessing)
 
-	// TODO: Categorize recipients by domain type (local, virtual, relay)
-	// For now, deliver to all recipients as configured types
-	localRecipients := msg.LocalRecipients
-	virtualRecipients := msg.VirtualRecipients
-
-	// Calculate number of delivery types
-	deliveryTypes := 0
-	if len(localRecipients) > 0 {
-		deliveryTypes++
-	}
-	if len(virtualRecipients) > 0 {
-		deliveryTypes++
-	}
-
-	// Channel to collect delivery results
+	// Collect one result per active delivery type
+	outboundRecipients := mergeRecipients(msg.RelayRecipients, msg.ExternalRecipients)
+	deliveryTypes := countNonEmpty(msg.LocalRecipients, msg.VirtualRecipients, outboundRecipients)
 	resultChan := make(chan delivery.DeliveryResult, deliveryTypes)
 
-	// Parallel delivery for local recipients using DeliverWithWorkers
-	if len(localRecipients) > 0 {
+	if len(msg.LocalRecipients) > 0 {
 		go func() {
-			maxWorkers := delivery.GetMaxWorkers(q.config.Delivery.Local.MaxWorkers, len(localRecipients))
-			result := delivery.DeliverWithWorkers(ctx, localRecipients, maxWorkers, delivery.RecipientLocal,
+			maxWorkers := delivery.GetMaxWorkers(q.config.Delivery.Local.MaxWorkers, len(msg.LocalRecipients))
+			resultChan <- delivery.DeliverWithWorkers(ctx, msg.LocalRecipients, maxWorkers, delivery.RecipientLocal,
 				func(ctx context.Context, recipient string) error {
 					return delivery.DeliverToLocalUser(ctx, msg, messagePath, recipient, &q.config.Delivery.Local)
 				})
-			resultChan <- result
 		}()
 	}
 
-	// Parallel delivery for virtual recipients
-	if len(virtualRecipients) > 0 {
+	if len(msg.VirtualRecipients) > 0 {
 		go func() {
-			maxWorkers := delivery.GetMaxWorkers(q.config.Delivery.Virtual.MaxWorkers, len(virtualRecipients))
-			result := delivery.DeliverWithWorkers(ctx, virtualRecipients, maxWorkers, delivery.RecipientVirtual,
+			maxWorkers := delivery.GetMaxWorkers(q.config.Delivery.Virtual.MaxWorkers, len(msg.VirtualRecipients))
+			resultChan <- delivery.DeliverWithWorkers(ctx, msg.VirtualRecipients, maxWorkers, delivery.RecipientVirtual,
 				func(ctx context.Context, recipient string) error {
 					return delivery.DeliverToVirtualUser(ctx, msg, messagePath, recipient, q.config.Delivery.Virtual.BaseDirPath)
 				})
-			resultChan <- result
 		}()
 	}
 
-	// Collect exactly the number of results we expect
-	var deliveryResults []delivery.DeliveryResult
-	for i := 0; i < deliveryTypes; i++ {
-		result := <-resultChan
-		deliveryResults = append(deliveryResults, result)
+	if len(outboundRecipients) > 0 {
+		go func() {
+			maxWorkers := delivery.GetMaxWorkers(q.config.Delivery.Outbound.MaxWorkers, len(outboundRecipients))
+			resultChan <- delivery.DeliverOutboundWithWorkers(ctx, outboundRecipients, maxWorkers, msg, messagePath)
+		}()
 	}
 
-	// Process delivery results and determine final message state
+	// Collect all results and track outcomes
 	totalSuccessful := 0
 	totalFailed := 0
-	for _, result := range deliveryResults {
-		totalSuccessful += len(result.Successful)
-		totalFailed += len(result.Failed)
+	var bounces []*Message
 
-		// Log delivery results
+	for i := 0; i < deliveryTypes; i++ {
+		result := <-resultChan
+
+		totalSuccessful += len(result.Successful)
+		totalFailed += len(result.Failed) + len(result.TempFailed) + len(result.PermFailed)
+
 		if len(result.Successful) > 0 {
 			log().Info("Delivery successful", "message_id", msg.ID, "type", result.Type,
-				"successful_count", len(result.Successful), "recipients", result.Successful)
+				"count", len(result.Successful), "recipients", result.Successful)
 		}
 		if len(result.Failed) > 0 {
 			log().Warn("Delivery failed", "message_id", msg.ID, "type", result.Type,
-				"failed_count", len(result.Failed), "recipients", result.Failed)
+				"count", len(result.Failed), "recipients", result.Failed)
+		}
+
+		// Handle retry state and bounce generation for outbound results
+		if result.Type == delivery.RecipientExternal || result.Type == delivery.RecipientRelay {
+			generated := delivery.HandleOutboundResult(
+				result, msg, spoolDir,
+				q.config.Server.Hostname,
+				q.config.Delivery.Outbound.RetryInterval,
+				q.config.Delivery.Outbound.RetryMaxAge,
+			)
+			bounces = append(bounces, generated...)
 		}
 	}
 
-	// Move to final state based on delivery results
+	// Inject any DSN bounces back into the queue for local delivery
+	for _, bounce := range bounces {
+		if err := WriteRawBody(spoolDir, bounce); err != nil {
+			log().Error("Failed to write DSN to spool", "original_id", msg.ID, "error", err)
+			continue
+		}
+		if err := q.PublishMessage(ctx, bounce); err != nil {
+			log().Error("Failed to publish DSN to queue", "original_id", msg.ID, "error", err)
+		} else {
+			log().Info("DSN bounce injected", "original_id", msg.ID, "bounce_id", bounce.ID)
+		}
+	}
+
 	var finalState MessageState
 	if totalFailed == 0 {
 		finalState = MessageStateDelivered
@@ -289,12 +297,39 @@ func (q *Queue) processMessage(ctx context.Context, msg *Message) {
 			"successful_count", totalSuccessful, "failed_count", totalFailed)
 	}
 
-	// Move message to final state
 	if err := MoveMessage(spoolDir, msg, MessageStateProcessing, finalState); err != nil {
 		log().Error("Failed to move message to final state", "message_id", msg.ID,
 			"final_state", finalState, "error", err)
-		return
 	}
 
 	log().Debug("Message processing completed", "message_id", msg.ID, "final_state", finalState)
+}
+
+// mergeRecipients merges multiple recipient maps into one without allocating if both empty.
+func mergeRecipients(maps ...map[string]struct{}) map[string]struct{} {
+	total := 0
+	for _, m := range maps {
+		total += len(m)
+	}
+	if total == 0 {
+		return nil
+	}
+	merged := make(map[string]struct{}, total)
+	for _, m := range maps {
+		for k := range m {
+			merged[k] = struct{}{}
+		}
+	}
+	return merged
+}
+
+// countNonEmpty counts how many of the provided maps are non-empty.
+func countNonEmpty(maps ...map[string]struct{}) int {
+	n := 0
+	for _, m := range maps {
+		if len(m) > 0 {
+			n++
+		}
+	}
+	return n
 }

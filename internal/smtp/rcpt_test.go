@@ -37,6 +37,10 @@ func (m *mockAuthenticator) Name() string {
 	return "mock"
 }
 
+func (m *mockAuthenticator) GetAllowedSenders(username string) []string {
+	return nil
+}
+
 func (m *mockAuthenticator) Close() error {
 	return nil
 }

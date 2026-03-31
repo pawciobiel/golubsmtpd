@@ -17,6 +17,10 @@ type Authenticator interface {
 	// ValidateUser checks if a user/email exists for RCPT TO validation
 	ValidateUser(ctx context.Context, email string) bool
 
+	// GetAllowedSenders returns all email addresses a username may use as MAIL FROM.
+	// Returns nil if the username is unknown to this plugin (chain tries next).
+	GetAllowedSenders(username string) []string
+
 	// Name returns the plugin name
 	Name() string
 

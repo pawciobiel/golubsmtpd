@@ -31,8 +31,31 @@ func Load(configPath string) (*Config, error) {
 }
 
 func validateConfig(config *Config) error {
-	if config.Server.Port <= 0 || config.Server.Port > 65535 {
-		return fmt.Errorf("invalid port: %d", config.Server.Port)
+	// Normalize: if no listeners configured, promote legacy Port field
+	if len(config.Server.Listeners) == 0 {
+		if config.Server.Port <= 0 || config.Server.Port > 65535 {
+			return fmt.Errorf("invalid port: %d", config.Server.Port)
+		}
+		config.Server.Listeners = []ListenerConfig{
+			{Port: config.Server.Port, Mode: ListenerModePlain},
+		}
+	}
+
+	validModes := map[ListenerMode]bool{
+		ListenerModePlain:    true,
+		ListenerModeSTARTTLS: true,
+		ListenerModeTLS:      true,
+	}
+	for _, l := range config.Server.Listeners {
+		if l.Port <= 0 || l.Port > 65535 {
+			return fmt.Errorf("invalid listener port: %d", l.Port)
+		}
+		if !validModes[l.Mode] {
+			return fmt.Errorf("invalid listener mode %q for port %d (valid: plain, starttls, tls)", l.Mode, l.Port)
+		}
+		if (l.Mode == ListenerModeSTARTTLS || l.Mode == ListenerModeTLS) && !config.TLS.Enabled {
+			return fmt.Errorf("listener port %d uses mode %q but tls is not enabled", l.Port, l.Mode)
+		}
 	}
 
 	if config.Server.MaxConnections <= 0 {

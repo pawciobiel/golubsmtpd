@@ -19,7 +19,9 @@ func (rt RecipientType) String() string {
 type DeliveryResult struct {
 	Type       RecipientType
 	Successful []string
-	Failed     []string
+	Failed     []string // generic fail — used by local/virtual delivery
+	TempFailed []string // 4xx — outbound only, schedule retry
+	PermFailed []string // 5xx — outbound only, generate bounce
 }
 
 // DeliveryOutcome represents the result of a single delivery attempt

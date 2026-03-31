@@ -3,6 +3,7 @@ package smtp
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/textproto"
 
 	"github.com/pawciobiel/golubsmtpd/internal/config"
@@ -49,16 +50,15 @@ func tcpSessionHandler(ctx context.Context, sess *Session) error {
 func NewTCPSession(
 	connCtx ConnectionContext,
 	cfg *config.Config,
+	rawConn net.Conn,
 	textproto *textproto.Conn,
 	validator SenderValidator,
 	deps *Dependencies,
 ) SMTPHandler {
-	// Create TCP-specific strategies
 	headerGenerator := &TCPHeaderGenerator{}
 	dataHandler := &TCPDataHandler{}
 
-	// Create session with strategies and handler
-	return NewSession(cfg, textproto, connCtx.ClientIP, deps,
+	return NewSession(cfg, rawConn, textproto, connCtx.ClientIP, deps,
 		headerGenerator, validator, dataHandler, tcpSessionHandler, connCtx)
 }
 
@@ -123,8 +123,8 @@ func NewSocketSession(
 		Credentials: credentials,
 	}
 
-	// Create session with strategies and handler
-	session := NewSession(cfg, textproto, "socket", deps,
+	// Unix socket connections never do STARTTLS — no rawConn needed
+	session := NewSession(cfg, nil, textproto, "socket", deps,
 		headerGenerator, validator, dataHandler, socketSessionHandler, connCtx)
 
 	// Mark as already authenticated since socket connections are kernel-verified

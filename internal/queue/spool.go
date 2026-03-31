@@ -182,6 +182,40 @@ func streamSMTPData(ctx context.Context, file *os.File, ioreader io.Reader, maxS
 	return totalWritten, nil
 }
 
+// WriteRawBody writes an in-memory message body (e.g. a DSN bounce) directly to the
+// incoming spool directory without SMTP dot-stuffing processing.
+func WriteRawBody(spoolDir string, message *Message) error {
+	filename := message.Filename()
+	incomingDir := filepath.Join(spoolDir, string(MessageStateIncoming))
+	tempFile := filepath.Join(incomingDir, filename+".tmp")
+	finalFile := filepath.Join(incomingDir, filename)
+
+	file, err := os.OpenFile(tempFile, os.O_CREATE|os.O_RDWR|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("failed to create spool file for DSN: %w", err)
+	}
+	defer func() {
+		file.Close()
+		if _, err := os.Stat(finalFile); os.IsNotExist(err) {
+			os.Remove(tempFile)
+		}
+	}()
+
+	if _, err := file.WriteString(message.RawBody); err != nil {
+		return fmt.Errorf("failed to write DSN body: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("failed to sync DSN file: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("failed to close DSN file: %w", err)
+	}
+	if err := os.Rename(tempFile, finalFile); err != nil {
+		return fmt.Errorf("failed to commit DSN file: %w", err)
+	}
+	return nil
+}
+
 // MoveMessage atomically moves a message between spool states using the message filename
 func MoveMessage(spoolDir string, msg *Message, fromState, toState MessageState) error {
 	filename := msg.Filename()

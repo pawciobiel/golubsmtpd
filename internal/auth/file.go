@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
+	"time"
 )
 
 // FileAuthenticator implements file-based authentication with streaming reads
@@ -168,6 +169,19 @@ func (f *FileAuthenticator) findUserInFile(ctx context.Context, email string, ne
 	}
 
 	return "", false // User not found
+}
+
+// GetAllowedSenders returns the username itself as the only allowed sender.
+// File auth has no alias support, so users may only send as their own username.
+// Returns nil if the username is not found in the file.
+func (f *FileAuthenticator) GetAllowedSenders(username string) []string {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, found := f.findUserInFile(ctx, username, false)
+	if !found {
+		return nil
+	}
+	return []string{username}
 }
 
 // ValidateUser checks if a user/email exists by streaming through the file

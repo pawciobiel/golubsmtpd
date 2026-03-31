@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"net/textproto"
@@ -26,10 +27,13 @@ const (
 
 type Server struct {
 	config       *config.Config
-	listener     net.Listener
+	listeners    []net.Listener // one per configured listener (TCP)
 	socketListen net.Listener
 	wg           sync.WaitGroup
 	shutdown     chan struct{}
+
+	// TLS configuration (nil if TLS disabled)
+	tlsConfig *tls.Config
 
 	// Security checkers
 	rdnsChecker  *security.RDNSChecker
@@ -68,58 +72,93 @@ func New(cfg *config.Config, authenticator auth.Authenticator, localAliasesMaps 
 	}
 }
 
-func (srv *Server) Start(ctx context.Context) error {
-	addr := fmt.Sprintf("%s:%d", srv.config.Server.Bind, srv.config.Server.Port)
-
-	listener, err := net.Listen("tcp", addr)
+// loadTLSConfig loads the TLS configuration from cert/key files
+func loadTLSConfig(cfg *config.TLSConfig) (*tls.Config, error) {
+	cert, err := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
 	if err != nil {
-		return fmt.Errorf("failed to listen on %s: %w", addr, err)
+		return nil, fmt.Errorf("failed to load TLS certificate: %w", err)
 	}
+	return &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
+	}, nil
+}
 
-	srv.listener = listener
+func (srv *Server) Start(ctx context.Context) error {
+	// Load TLS config if enabled
+	if srv.config.TLS.Enabled {
+		tlsCfg, err := loadTLSConfig(&srv.config.TLS)
+		if err != nil {
+			return err
+		}
+		srv.tlsConfig = tlsCfg
+	}
 
 	// Initialize and start message queue
 	srv.queue = queue.NewQueue(ctx, srv.config)
 	srv.queue.StartConsumer(ctx)
-
-	// Update SMTP dependencies with queue
 	srv.smtpDeps.Queue = srv.queue
 
-	log().Info("SMTP server started", "address", addr)
+	// Start one TCP listener per configured listener
+	for _, lcfg := range srv.config.Server.Listeners {
+		addr := fmt.Sprintf("%s:%d", srv.config.Server.Bind, lcfg.Port)
+
+		var ln net.Listener
+		var err error
+
+		if lcfg.Mode == config.ListenerModeTLS {
+			if srv.tlsConfig == nil {
+				return fmt.Errorf("TLS listener on port %d requires tls config", lcfg.Port)
+			}
+			ln, err = tls.Listen("tcp", addr, srv.tlsConfig)
+		} else {
+			ln, err = net.Listen("tcp", addr)
+		}
+
+		if err != nil {
+			srv.closeAllListeners()
+			return fmt.Errorf("failed to listen on %s: %w", addr, err)
+		}
+
+		srv.listeners = append(srv.listeners, ln)
+		log().Info("SMTP listener started", "address", addr, "mode", lcfg.Mode)
+
+		srv.wg.Add(1)
+		go srv.acceptLoop(ctx, ln, lcfg)
+	}
 
 	// Start Unix domain socket listener
 	if err := srv.startSocketListener(ctx); err != nil {
-		srv.listener.Close()
+		srv.closeAllListeners()
 		return fmt.Errorf("failed to start Unix domain socket listener: %w", err)
 	}
 
-	// Start accepting connections
-	srv.wg.Add(1)
-	go srv.acceptLoop(ctx)
-
 	return nil
+}
+
+func (srv *Server) closeAllListeners() {
+	for _, ln := range srv.listeners {
+		ln.Close()
+	}
 }
 
 func (srv *Server) Stop(ctx context.Context) error {
 	log().Info("Shutting down SMTP server")
 	close(srv.shutdown)
 
-	if srv.listener != nil {
-		srv.listener.Close()
-	}
+	srv.closeAllListeners()
 
 	if srv.socketListen != nil {
 		srv.socketListen.Close()
 	}
 
-	// Stop message queue first
+	// Stop message queue
 	if srv.queue != nil {
 		if err := srv.queue.Stop(ctx); err != nil {
 			log().Error("Error stopping message queue", "error", err)
 		}
 	}
 
-	// Wait for all goroutines to finish with timeout
 	done := make(chan struct{})
 	go func() {
 		srv.wg.Wait()
@@ -136,7 +175,7 @@ func (srv *Server) Stop(ctx context.Context) error {
 	}
 }
 
-func (srv *Server) acceptLoop(ctx context.Context) {
+func (srv *Server) acceptLoop(ctx context.Context, ln net.Listener, lcfg config.ListenerConfig) {
 	defer srv.wg.Done()
 
 	for {
@@ -146,30 +185,28 @@ func (srv *Server) acceptLoop(ctx context.Context) {
 		default:
 		}
 
-		conn, err := srv.listener.Accept()
+		conn, err := ln.Accept()
 		if err != nil {
 			select {
 			case <-srv.shutdown:
 				return
 			default:
-				log().Error("Failed to accept connection", "error", err)
+				log().Error("Failed to accept connection", "error", err, "port", lcfg.Port)
 				continue
 			}
 		}
 
 		clientIP := getClientIP(conn)
 
-		// Check limits BEFORE spawning goroutine
 		if !srv.canAcceptConnection(clientIP) {
 			conn.Close()
 			continue
 		}
 
-		// Track connection
 		srv.trackConnection(clientIP)
 
 		srv.wg.Add(1)
-		go srv.handleConnection(ctx, conn, clientIP)
+		go srv.handleConnection(ctx, conn, clientIP, lcfg)
 	}
 }
 
@@ -256,19 +293,18 @@ func (srv *Server) performSecurityChecks(ctx context.Context, clientIP string) b
 	return true
 }
 
-func (srv *Server) handleConnection(ctx context.Context, conn net.Conn, clientIP string) {
+func (srv *Server) handleConnection(ctx context.Context, conn net.Conn, clientIP string, lcfg config.ListenerConfig) {
 	defer srv.wg.Done()
 	defer srv.untrackConnection(clientIP)
 	defer conn.Close()
 
-	log().Info("New connection accepted", "client_ip", clientIP)
+	log().Info("New connection accepted", "client_ip", clientIP, "port", lcfg.Port, "mode", lcfg.Mode)
 
 	if !srv.performSecurityChecks(ctx, clientIP) {
 		log().Warn("Connection rejected due to security checks", "client_ip", clientIP)
 		return
 	}
 
-	// Set connection timeouts
 	if srv.config.Server.ReadTimeout > 0 {
 		conn.SetReadDeadline(time.Now().Add(srv.config.Server.ReadTimeout))
 	}
@@ -276,17 +312,17 @@ func (srv *Server) handleConnection(ctx context.Context, conn net.Conn, clientIP
 		conn.SetWriteDeadline(time.Now().Add(srv.config.Server.WriteTimeout))
 	}
 
-	// Create connection context for TCP
 	connCtx := smtp.ConnectionContext{
-		Type:     smtp.ConnectionTypeTCP,
-		Port:     srv.config.Server.Port,
-		TLS:      false, // TODO: detect TLS state
-		ClientIP: clientIP,
+		Type:      smtp.ConnectionTypeTCP,
+		Port:      lcfg.Port,
+		Mode:      smtp.ListenerMode(lcfg.Mode),
+		TLS:       lcfg.Mode == config.ListenerModeTLS, // implicit TLS already active
+		ClientIP:  clientIP,
+		TLSConfig: srv.tlsConfig,
 	}
 
-	// Create SMTP handler using factory
 	textprotoConn := textproto.NewConn(conn)
-	handler := smtp.NewSMTPHandler(connCtx, srv.config, textprotoConn, srv.smtpDeps)
+	handler := smtp.NewSMTPHandler(connCtx, srv.config, conn, textprotoConn, srv.smtpDeps)
 
 	if err := handler.Handle(ctx); err != nil {
 		log().Debug("SMTP session ended", "client_ip", clientIP, "error", err)
