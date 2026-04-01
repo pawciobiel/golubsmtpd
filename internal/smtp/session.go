@@ -49,7 +49,7 @@ type Session struct {
 
 	// Strategy interfaces for different behaviors
 	headerGenerator HeaderGenerator
-	senderValidator SenderValidator
+	senderValidator SessionValidator
 	dataHandler     DataHandler
 	sessionHandler  SessionHandlerFunc
 	connCtx         ConnectionContext
@@ -76,7 +76,7 @@ func NewSession(
 	clientIP string,
 	deps *Dependencies,
 	headerGenerator HeaderGenerator,
-	senderValidator SenderValidator,
+	senderValidator SessionValidator,
 	dataHandler DataHandler,
 	sessionHandler SessionHandlerFunc,
 	connCtx ConnectionContext,
@@ -380,6 +380,17 @@ func (sess *Session) handleMail(ctx context.Context, args []string) error {
 		return sess.writeResponse(Response(StatusParamError, err.Error()))
 	}
 
+	senderCtx := ValidationContext{
+		Username:      sess.username,
+		Authenticated: sess.authenticated,
+		ClientIP:      sess.clientIP,
+		EHLOHostname:  sess.clientHelloHostname,
+	}
+	if err := sess.senderValidator.ValidateSender(emailAddr.Full, senderCtx); err != nil {
+		sess.logger.Info("Sender rejected", "sender", emailAddr.Full, "error", err, "client_ip", sess.clientIP)
+		return sess.writeResponse(Response(StatusMailboxUnavailable, "Sender address not allowed"))
+	}
+
 	// Store the sender address in message
 	sess.currentMessage.From = emailAddr.Full
 	sess.state = StateMailFrom
@@ -409,6 +420,19 @@ func (sess *Session) handleRcpt(ctx context.Context, args []string) error {
 
 	// Classify domain type
 	domainType := sess.classifyDomain(emailAddr.Domain)
+
+	// Validate recipient against connection policy
+	rcptCtx := ValidationContext{
+		Username:      sess.username,
+		Authenticated: sess.authenticated,
+		ClientIP:      sess.clientIP,
+		EHLOHostname:  sess.clientHelloHostname,
+		RecipientType: domainType,
+	}
+	if err := sess.senderValidator.ValidateRecipient(emailAddr.Full, rcptCtx); err != nil {
+		sess.logger.Info("Recipient rejected", "recipient", emailAddr.Full, "domain_type", domainType, "error", err, "client_ip", sess.clientIP)
+		return sess.writeResponse(Response(StatusTransactionFailed, "Relay not permitted"))
+	}
 
 	// Handle based on domain type
 	switch domainType {

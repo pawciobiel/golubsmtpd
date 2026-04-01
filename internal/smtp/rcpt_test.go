@@ -120,6 +120,24 @@ webmaster: %s,%s
 	}
 }
 
+func TestRelayValidator(t *testing.T) {
+	cfg := config.DefaultConfig()
+	v := NewRelayValidator(cfg)
+
+	if err := v.ValidateSender("", ValidationContext{}); err != nil {
+		t.Errorf("ValidateSender(\"\") should accept null sender (bounce/DSN), got: %v", err)
+	}
+	if err := v.ValidateSender("sender@external.com", ValidationContext{}); err != nil {
+		t.Errorf("ValidateSender(external) should accept any MTA sender, got: %v", err)
+	}
+	if v.IsAuthenticated() {
+		t.Error("IsAuthenticated() should be false for port-25 relay connections")
+	}
+	if got := v.GetUsername(); got != "" {
+		t.Errorf("GetUsername() should be empty, got %q", got)
+	}
+}
+
 func TestRcptValidator_ResolveLocalAlias_NoMaps(t *testing.T) {
 	cfg := &config.Config{
 		Server: config.ServerConfig{

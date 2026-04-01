@@ -9,6 +9,7 @@ import (
 
 	"github.com/pawciobiel/golubsmtpd/internal/auth"
 	"github.com/pawciobiel/golubsmtpd/internal/config"
+	"github.com/pawciobiel/golubsmtpd/internal/delivery"
 	"github.com/pawciobiel/golubsmtpd/internal/logging"
 	"github.com/pawciobiel/golubsmtpd/internal/queue"
 )
@@ -52,8 +53,20 @@ type HeaderGenerator interface {
 	GenerateHeaders(msg *queue.Message, connCtx ConnectionContext) string
 }
 
-type SenderValidator interface {
-	ValidateSender(sender string) error
+// ValidationContext carries per-call context for sender and recipient validation.
+// ClientIP and EHLOHostname are available for future SPF/network checks.
+// RecipientType is set only when calling ValidateRecipient.
+type ValidationContext struct {
+	Username      string
+	Authenticated bool
+	ClientIP      string
+	EHLOHostname  string
+	RecipientType delivery.RecipientType
+}
+
+type SessionValidator interface {
+	ValidateSender(sender string, ctx ValidationContext) error
+	ValidateRecipient(recipient string, ctx ValidationContext) error
 	IsAuthenticated() bool
 	GetUsername() string
 }
@@ -74,7 +87,7 @@ func NewSMTPHandler(
 ) SMTPHandler {
 	logger := logging.GetLogger()
 
-	validator := createSenderValidator(connCtx, cfg, deps.Authenticator, logger)
+	validator := createSessionValidator(connCtx, cfg, deps.Authenticator, logger)
 
 	logger.Debug("Creating SMTP handler", "connection_type", connCtx.Type)
 
@@ -91,16 +104,16 @@ func NewSMTPHandler(
 	}
 }
 
-// createSenderValidator creates appropriate validator based on connection context
-func createSenderValidator(
+// createSessionValidator creates appropriate validator based on connection context
+func createSessionValidator(
 	connCtx ConnectionContext,
 	cfg *config.Config,
 	authenticator auth.Authenticator,
 	logger *slog.Logger,
-) SenderValidator {
+) SessionValidator {
 	switch connCtx.Type {
 	case ConnectionTypeSocket:
-		return NewSocketSenderValidator(connCtx.Credentials, cfg, logger)
+		return NewSocketValidator(connCtx.Credentials, cfg, logger)
 	case ConnectionTypeTCP:
 		// Validator is selected by IANA-assigned port semantics:
 		//   25  = MTA-to-MTA relay (permissive sender, RCPT TO enforces relay policy)
@@ -112,12 +125,12 @@ func createSenderValidator(
 		// Requires config changes and validation updates.
 		switch connCtx.Port {
 		case 587, 465:
-			return NewSubmissionSenderValidator(authenticator, cfg)
+			return NewSubmissionValidator(authenticator, cfg)
 		default:
-			return NewRelayValidator(cfg, logger)
+			return NewRelayValidator(cfg)
 		}
 	default:
 		logger.Error("Unknown connection type for validator", "type", connCtx.Type)
-		return NewRelayValidator(cfg, logger)
+		return NewRelayValidator(cfg)
 	}
 }

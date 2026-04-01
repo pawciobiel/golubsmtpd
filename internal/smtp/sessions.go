@@ -52,7 +52,7 @@ func NewTCPSession(
 	cfg *config.Config,
 	rawConn net.Conn,
 	textproto *textproto.Conn,
-	validator SenderValidator,
+	validator SessionValidator,
 	deps *Dependencies,
 ) SMTPHandler {
 	headerGenerator := &TCPHeaderGenerator{}
@@ -102,7 +102,7 @@ func NewSocketSession(
 	credentials *SocketCredentials,
 	cfg *config.Config,
 	textproto *textproto.Conn,
-	validator SenderValidator,
+	validator SessionValidator,
 	deps *Dependencies,
 ) SMTPHandler {
 	// Get username from UID

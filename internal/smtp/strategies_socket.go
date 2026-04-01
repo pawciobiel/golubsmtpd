@@ -140,11 +140,13 @@ func (h *SocketDataHandler) HandleMail(ctx context.Context, args []string, sess 
 	sender := emailAddr.Full
 
 	// Use socket validator for sender validation
-	if err := sess.senderValidator.ValidateSender(sender); err != nil {
-		sess.logger.Warn("Socket sender validation failed",
-			"sender", sender,
-			"username", sess.senderValidator.GetUsername(),
-			"error", err)
+	senderCtx := ValidationContext{
+		Username:      sess.senderValidator.GetUsername(),
+		Authenticated: true,
+		ClientIP:      "socket",
+	}
+	if err := sess.senderValidator.ValidateSender(sender, senderCtx); err != nil {
+		sess.logger.Info("Sender rejected", "sender", sender, "username", sess.senderValidator.GetUsername(), "error", err)
 		return sess.writeResponse(Response(StatusMailboxUnavailable, "Sender address not allowed"))
 	}
 

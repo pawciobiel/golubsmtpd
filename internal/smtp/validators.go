@@ -9,25 +9,34 @@ import (
 
 	"github.com/pawciobiel/golubsmtpd/internal/auth"
 	"github.com/pawciobiel/golubsmtpd/internal/config"
+	"github.com/pawciobiel/golubsmtpd/internal/delivery"
 )
 
-// SocketSenderValidator validates senders for Unix socket connections
-type SocketSenderValidator struct {
+// ValidationError is returned by ValidateSender when a policy rejects the sender.
+// Reason is a human-readable string safe to include in log output.
+type ValidationError struct {
+	Reason string
+}
+
+func (e *ValidationError) Error() string { return e.Reason }
+
+// SocketValidator validates senders for Unix socket connections
+type SocketValidator struct {
 	credentials *SocketCredentials
 	username    string
 	config      *config.Config
 	logger      *slog.Logger
 }
 
-// NewSocketSenderValidator creates a new socket sender validator
-func NewSocketSenderValidator(creds *SocketCredentials, cfg *config.Config, logger *slog.Logger) *SocketSenderValidator {
+// NewSocketValidator creates a new socket validator
+func NewSocketValidator(creds *SocketCredentials, cfg *config.Config, logger *slog.Logger) *SocketValidator {
 	username, err := getUsernameFromUID(creds.UID)
 	if err != nil {
 		logger.Error("Failed to get username from UID", "uid", creds.UID, "error", err)
 		username = fmt.Sprintf("uid-%d", creds.UID)
 	}
 
-	return &SocketSenderValidator{
+	return &SocketValidator{
 		credentials: creds,
 		username:    username,
 		config:      cfg,
@@ -35,21 +44,18 @@ func NewSocketSenderValidator(creds *SocketCredentials, cfg *config.Config, logg
 	}
 }
 
-func (v *SocketSenderValidator) ValidateSender(sender string) error {
-	// Empty sender (bounce messages) - only allow for trusted users
+func (v *SocketValidator) ValidateSender(sender string, _ ValidationContext) error {
 	if sender == "" {
 		if v.isTrustedUser() {
 			return nil
 		}
-		return fmt.Errorf("null sender not allowed for user %s", v.username)
+		return &ValidationError{Reason: fmt.Sprintf("null sender not allowed for user %s", v.username)}
 	}
 
-	// Trusted users can send as anyone (like Postfix)
 	if v.isTrustedUser() {
 		return nil
 	}
 
-	// Regular users can only send as themselves for local domains
 	allowedSenders := v.getAllowedSenders()
 	for _, allowed := range allowedSenders {
 		if strings.EqualFold(sender, allowed) {
@@ -57,18 +63,22 @@ func (v *SocketSenderValidator) ValidateSender(sender string) error {
 		}
 	}
 
-	return fmt.Errorf("user %s not allowed to send as %s", v.username, sender)
+	return &ValidationError{Reason: fmt.Sprintf("user %s not allowed to send as %s", v.username, sender)}
 }
 
-func (v *SocketSenderValidator) IsAuthenticated() bool {
-	return true // Socket connections are always "authenticated" via kernel
+func (v *SocketValidator) ValidateRecipient(_ string, _ ValidationContext) error {
+	return nil
 }
 
-func (v *SocketSenderValidator) GetUsername() string {
+func (v *SocketValidator) IsAuthenticated() bool {
+	return true
+}
+
+func (v *SocketValidator) GetUsername() string {
 	return v.username
 }
 
-func (v *SocketSenderValidator) isTrustedUser() bool {
+func (v *SocketValidator) isTrustedUser() bool {
 	for _, trustedUser := range v.config.Server.TrustedUsers {
 		if trustedUser == v.username {
 			return true
@@ -77,8 +87,7 @@ func (v *SocketSenderValidator) isTrustedUser() bool {
 	return false
 }
 
-func (v *SocketSenderValidator) getAllowedSenders() []string {
-	// Allow user@localdomain for each local domain (like Postfix)
+func (v *SocketValidator) getAllowedSenders() []string {
 	allowed := make([]string, 0, len(v.config.Server.LocalDomains))
 	for _, domain := range v.config.Server.LocalDomains {
 		allowed = append(allowed, v.username+"@"+domain)
@@ -86,89 +95,87 @@ func (v *SocketSenderValidator) getAllowedSenders() []string {
 	return allowed
 }
 
-// SubmissionSenderValidator validates senders for submission ports (587, 465)
-type SubmissionSenderValidator struct {
+// SubmissionValidator validates senders for submission ports (587, 465).
+// Auth state is read from ValidationContext — no local state duplication.
+type SubmissionValidator struct {
 	authenticator auth.Authenticator
 	config        *config.Config
-	authenticated bool
-	username      string
 }
 
-// NewSubmissionSenderValidator creates a new submission sender validator
-func NewSubmissionSenderValidator(authenticator auth.Authenticator, cfg *config.Config) *SubmissionSenderValidator {
-	return &SubmissionSenderValidator{
+// NewSubmissionValidator creates a new submission validator
+func NewSubmissionValidator(authenticator auth.Authenticator, cfg *config.Config) *SubmissionValidator {
+	return &SubmissionValidator{
 		authenticator: authenticator,
 		config:        cfg,
-		authenticated: false,
 	}
 }
 
-func (v *SubmissionSenderValidator) ValidateSender(sender string) error {
-	if !v.authenticated {
-		return fmt.Errorf("authentication required for sender validation")
+func (v *SubmissionValidator) ValidateSender(sender string, ctx ValidationContext) error {
+	if !ctx.Authenticated {
+		return &ValidationError{Reason: "authentication required before MAIL FROM"}
 	}
 
 	if sender == "" {
-		return fmt.Errorf("null sender not allowed on submission port")
+		return &ValidationError{Reason: "null sender not allowed on submission port"}
 	}
 
-	allowed := v.authenticator.GetAllowedSenders(v.username)
+	allowed := v.authenticator.GetAllowedSenders(ctx.Username)
 	for _, a := range allowed {
 		if strings.EqualFold(a, sender) {
 			return nil
 		}
 	}
 
-	return fmt.Errorf("user %s not allowed to send as %s", v.username, sender)
+	return &ValidationError{Reason: fmt.Sprintf("user %s not allowed to send as %s", ctx.Username, sender)}
 }
 
-func (v *SubmissionSenderValidator) IsAuthenticated() bool {
-	return v.authenticated
+func (v *SubmissionValidator) ValidateRecipient(_ string, ctx ValidationContext) error {
+	if ctx.RecipientType == delivery.RecipientExternal {
+		return &ValidationError{Reason: fmt.Sprintf("user %s may not send to external recipients", ctx.Username)}
+	}
+	return nil
 }
 
-func (v *SubmissionSenderValidator) GetUsername() string {
-	return v.username
+func (v *SubmissionValidator) IsAuthenticated() bool {
+	return false
 }
 
-// SetAuthenticated marks the user as authenticated
-func (v *SubmissionSenderValidator) SetAuthenticated(username string) {
-	v.authenticated = true
-	v.username = username
+func (v *SubmissionValidator) GetUsername() string {
+	return ""
 }
 
-// RelayValidator validates senders for relay port (25)
+// RelayValidator accepts all senders; recipient policy is enforced in handleRcpt.
 type RelayValidator struct {
 	config *config.Config
-	logger *slog.Logger
 }
 
-// NewRelayValidator creates a new relay validator
-func NewRelayValidator(cfg *config.Config, logger *slog.Logger) *RelayValidator {
-	return &RelayValidator{
-		config: cfg,
-		logger: logger,
-	}
+func NewRelayValidator(cfg *config.Config) *RelayValidator {
+	return &RelayValidator{config: cfg}
 }
 
-func (v *RelayValidator) ValidateSender(sender string) error {
-	// On port 25, we're more permissive as this is for MTA-to-MTA communication
-	// TODO: Add proper relay rules, SPF checking, etc.
+func (v *RelayValidator) ValidateSender(sender string, _ ValidationContext) error {
+	// Accept null sender (RFC 5321 §4.5.5 — bounce/DSN messages use <>).
+	// Accept any non-empty sender: cannot validate or restrict the envelope sender
+	// for inbound MTA connections. TODO: optionally verify via SPF (phase 2).
+	return nil
+}
 
-	// Allow empty sender for bounce messages
-	if sender == "" {
-		return nil
+func (v *RelayValidator) ValidateRecipient(_ string, ctx ValidationContext) error {
+	if !v.config.Relay.Enabled {
+		return &ValidationError{Reason: "relay disabled in config"}
 	}
-
-	// For now, allow any sender - proper relay rules will be added later
+	if ctx.Authenticated {
+		return &ValidationError{Reason: "authenticated session may not use relay queue"}
+	}
 	return nil
 }
 
 func (v *RelayValidator) IsAuthenticated() bool {
-	return false // Port 25 typically doesn't require authentication
+	return false
 }
 
 func (v *RelayValidator) GetUsername() string {
-	return "" // No user for unauthenticated connections
+	return ""
 }
 
 // getUsernameFromUID converts UID to username
@@ -179,3 +186,4 @@ func getUsernameFromUID(uid int) (string, error) {
 	}
 	return u.Username, nil
 }
+

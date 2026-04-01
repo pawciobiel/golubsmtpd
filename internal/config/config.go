@@ -5,6 +5,7 @@ import "time"
 type Config struct {
 	Server   ServerConfig   `yaml:"server"`
 	TLS      TLSConfig      `yaml:"tls"`
+	Relay    RelayConfig    `yaml:"relay"`
 	Maildir  MaildirConfig  `yaml:"maildir"`
 	Auth     AuthConfig     `yaml:"auth"`
 	Security SecurityConfig `yaml:"security"`
@@ -48,6 +49,12 @@ type ServerConfig struct {
 	SocketPath          string        `yaml:"socket_path"`
 	LocalAliasesFilePath string       `yaml:"local_aliases_file_path"`
 	TrustedUsers        []string      `yaml:"trusted_users"`
+}
+
+// RelayConfig controls inbound MTA-to-MTA relay behaviour on port 25.
+// TODO: add Networks ([]string, trusted CIDRs) and migrate RelayDomains here.
+type RelayConfig struct {
+	Enabled bool `yaml:"enabled"` // false = reject all relay-domain recipients (deny-by-default)
 }
 
 type TLSConfig struct {
@@ -159,6 +166,9 @@ func DefaultConfig() *Config {
 			TrustedUsers:        []string{"root", "mail", "daemon"},
 		},
 		TLS: TLSConfig{
+			Enabled: false,
+		},
+		Relay: RelayConfig{
 			Enabled: false,
 		},
 		Maildir: MaildirConfig{
