@@ -53,3 +53,14 @@ delivery:
   virtual:
     base_dir_path: "./test-mail"
     max_workers: 10
+  outbound:
+    tls:
+      policy: "opportunistic"
+      min_version: "tls12"
+      skip_verify: false
+    timeouts:
+      dial: "10s"
+      greeting: "30s"
+      command: "30s"
+      tls_handshake: "15s"
+      data_transfer: "5m"

@@ -237,7 +237,7 @@ func (q *Queue) processMessage(ctx context.Context, msg *Message) {
 	if len(outboundRecipients) > 0 {
 		go func() {
 			maxWorkers := delivery.GetMaxWorkers(q.config.Delivery.Outbound.MaxWorkers, len(outboundRecipients))
-			resultChan <- delivery.DeliverOutboundWithWorkers(ctx, outboundRecipients, maxWorkers, msg, messagePath)
+			resultChan <- delivery.DeliverOutboundWithWorkers(ctx, outboundRecipients, maxWorkers, msg, messagePath, &q.config.Delivery.Outbound)
 		}()
 	}
 

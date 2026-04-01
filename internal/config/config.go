@@ -110,9 +110,25 @@ type DeliveryConfig struct {
 }
 
 type OutboundDeliveryConfig struct {
-	MaxWorkers  int           `yaml:"max_workers"`  // max concurrent outbound domain connections
-	RetryInterval time.Duration `yaml:"retry_interval"` // fixed interval between retry attempts for 4xx tempfails
-	RetryMaxAge   time.Duration `yaml:"retry_max_age"`  // give up retrying after this duration
+	MaxWorkers    int                  `yaml:"max_workers"`
+	RetryInterval time.Duration        `yaml:"retry_interval"`
+	RetryMaxAge   time.Duration        `yaml:"retry_max_age"`
+	Timeouts      OutboundTimeouts     `yaml:"timeouts"`
+	TLS           OutboundTLSConfig    `yaml:"tls"`
+}
+
+type OutboundTimeouts struct {
+	Dial         time.Duration `yaml:"dial"`
+	Greeting     time.Duration `yaml:"greeting"`
+	Command      time.Duration `yaml:"command"`
+	TLSHandshake time.Duration `yaml:"tls_handshake"`
+	DataTransfer time.Duration `yaml:"data_transfer"`
+}
+
+type OutboundTLSConfig struct {
+	Policy     string `yaml:"policy"`      // "opportunistic" | "required"
+	MinVersion string `yaml:"min_version"` // "tls12" | "tls13"
+	SkipVerify bool   `yaml:"skip_verify"` // false by default; test environments only
 }
 
 type LocalDeliveryConfig struct {
@@ -210,7 +226,19 @@ func DefaultConfig() *Config {
 			Outbound: OutboundDeliveryConfig{
 				MaxWorkers:    10,
 				RetryInterval: 30 * time.Minute,
-				RetryMaxAge:   5 * 24 * time.Hour, // RFC 5321 §4.5.4.1 minimum; Postfix default is also 5 days
+				RetryMaxAge:   5 * 24 * time.Hour,
+				Timeouts: OutboundTimeouts{
+					Dial:         10 * time.Second,
+					Greeting:     30 * time.Second,
+					Command:      30 * time.Second,
+					TLSHandshake: 15 * time.Second,
+					DataTransfer: 5 * time.Minute,
+				},
+				TLS: OutboundTLSConfig{
+					Policy:     "opportunistic",
+					MinVersion: "tls12",
+					SkipVerify: false,
+				},
 			},
 			Virtual: VirtualDeliveryConfig{
 				BaseDirPath: "/var/mail/virtual",
