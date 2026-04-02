@@ -31,6 +31,15 @@ func createQueueTestConfig() *config.Config {
 	}
 }
 
+func mustNewQueue(t *testing.T, ctx context.Context, cfg *config.Config) *Queue {
+	t.Helper()
+	q, err := NewQueue(ctx, cfg)
+	if err != nil {
+		t.Fatalf("NewQueue failed: %v", err)
+	}
+	return q
+}
+
 func createTestMessage() *Message {
 	return &Message{
 		ID:      GenerateID(),
@@ -48,7 +57,7 @@ func TestQueue_BasicPublishAndConsume(t *testing.T) {
 	defer cancel()
 
 	cfg := createQueueTestConfig()
-	queue := NewQueue(ctx, cfg)
+	queue := mustNewQueue(t, ctx, cfg)
 
 	// Start consumers
 	queue.StartConsumer(ctx)
@@ -77,7 +86,7 @@ func TestQueue_PublishToFullQueue(t *testing.T) {
 
 			// Create queue with buffer size 1 and no consumers
 		cfg := &config.Config{Queue: config.QueueConfig{BufferSize: 1, MaxConsumers: 1}}
-		queue := NewQueue(ctx, cfg)
+		queue := mustNewQueue(t, ctx, cfg)
 
 		// Publish first message (should succeed)
 		msg1 := createTestMessage()
@@ -113,7 +122,7 @@ func TestQueue_PublishAfterStop(t *testing.T) {
 	defer cancel()
 
 	cfg := &config.Config{Queue: config.QueueConfig{BufferSize: 10, MaxConsumers: 1}}
-	queue := NewQueue(ctx, cfg)
+	queue := mustNewQueue(t, ctx, cfg)
 
 	// Start and immediately stop
 	queue.StartConsumer(ctx)
@@ -135,7 +144,7 @@ func TestQueue_ConcurrentPublishing(t *testing.T) {
 	defer cancel()
 
 	cfg := &config.Config{Queue: config.QueueConfig{BufferSize: 100, MaxConsumers: 5}}
-	queue := NewQueue(ctx, cfg)
+	queue := mustNewQueue(t, ctx, cfg)
 
 	queue.StartConsumer(ctx)
 	defer queue.Stop(ctx)
@@ -189,7 +198,7 @@ func TestQueue_SemaphoreLimit(t *testing.T) {
 
 	// Queue with buffer=10 but only 1 consumer (semaphore limit)
 	cfg := &config.Config{Queue: config.QueueConfig{BufferSize: 10, MaxConsumers: 1}}
-	queue := NewQueue(ctx, cfg)
+	queue := mustNewQueue(t, ctx, cfg)
 
 	queue.StartConsumer(ctx)
 	defer queue.Stop(ctx)
@@ -215,7 +224,7 @@ func TestQueue_GracefulShutdown(t *testing.T) {
 	defer cancel()
 
 	cfg := &config.Config{Queue: config.QueueConfig{BufferSize: 5, MaxConsumers: 2}}
-	queue := NewQueue(ctx, cfg)
+	queue := mustNewQueue(t, ctx, cfg)
 
 	queue.StartConsumer(ctx)
 
@@ -246,7 +255,7 @@ func TestQueue_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	cfg := &config.Config{Queue: config.QueueConfig{BufferSize: 5, MaxConsumers: 1}}
-	queue := NewQueue(ctx, cfg)
+	queue := mustNewQueue(t, ctx, cfg)
 
 	queue.StartConsumer(ctx)
 
@@ -272,7 +281,7 @@ func TestNewQueue(t *testing.T) {
 	ctx := context.Background()
 
 	cfg := &config.Config{Queue: config.QueueConfig{BufferSize: 50, MaxConsumers: 3}}
-	queue := NewQueue(ctx, cfg)
+	queue := mustNewQueue(t, ctx, cfg)
 	if queue == nil {
 		t.Fatal("NewQueue returned nil")
 	}

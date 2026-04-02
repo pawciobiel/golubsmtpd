@@ -95,7 +95,11 @@ func (srv *Server) Start(ctx context.Context) error {
 	}
 
 	// Initialize and start message queue
-	srv.queue = queue.NewQueue(ctx, srv.config)
+	var err error
+	srv.queue, err = queue.NewQueue(ctx, srv.config)
+	if err != nil {
+		return err
+	}
 	srv.queue.StartConsumer(ctx)
 	srv.smtpDeps.Queue = srv.queue
 

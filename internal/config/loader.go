@@ -4,9 +4,27 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"regexp"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
+
+// dkimLabelRe matches a single DNS label: alphanumeric and hyphens, not starting/ending with hyphen.
+var dkimLabelRe = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9\-]*[A-Za-z0-9])?$|^[A-Za-z0-9]$`)
+
+// isValidDKIMDomain returns true if s looks like a valid domain name (dot-separated labels).
+func isValidDKIMDomain(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, label := range strings.Split(s, ".") {
+		if !dkimLabelRe.MatchString(label) {
+			return false
+		}
+	}
+	return true
+}
 
 func Load(configPath string) (*Config, error) {
 	config := DefaultConfig()
@@ -114,6 +132,29 @@ func validateConfig(config *Config) error {
 		slog.Warn("outbound TLS certificate verification disabled — only use in test environments")
 	}
 	applyDefaultOutboundTimeouts(&config.Delivery.Outbound.Timeouts)
+
+	if d := config.Delivery.Outbound.DKIM; d.Enabled {
+		if d.Domain == "" {
+			return fmt.Errorf("dkim.domain is required when dkim is enabled")
+		}
+		if !isValidDKIMDomain(d.Domain) {
+			return fmt.Errorf("dkim.domain %q contains invalid characters", d.Domain)
+		}
+		if d.Selector == "" {
+			return fmt.Errorf("dkim.selector is required when dkim is enabled")
+		}
+		if !dkimLabelRe.MatchString(d.Selector) {
+			return fmt.Errorf("dkim.selector %q contains invalid characters (alphanumeric and hyphens only)", d.Selector)
+		}
+		if d.PrivateKeyFile == "" {
+			return fmt.Errorf("dkim.private_key_file is required when dkim is enabled")
+		}
+		f, err := os.Open(d.PrivateKeyFile)
+		if err != nil {
+			return fmt.Errorf("dkim private key file not readable: %w", err)
+		}
+		f.Close()
+	}
 
 	return nil
 }

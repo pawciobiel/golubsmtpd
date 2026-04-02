@@ -3,6 +3,7 @@ package queue
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -21,7 +22,8 @@ var (
 type Queue struct {
 	messageQueue chan *Message
 	config       *config.Config
-	sem          chan struct{} // Limits concurrent processors
+	dkimSigner   *delivery.DKIMSigner // nil when DKIM is disabled
+	sem          chan struct{}         // Limits concurrent processors
 	processorWg  sync.WaitGroup
 	consumerDone chan struct{} // Signals when consumer loop exits
 
@@ -31,10 +33,10 @@ type Queue struct {
 	publisherWg     sync.WaitGroup     // Track active publishers
 }
 
-func NewQueue(ctx context.Context, config *config.Config) *Queue {
+func NewQueue(ctx context.Context, config *config.Config) (*Queue, error) {
 	publisherCtx, cancel := context.WithCancel(ctx) // cancel is a function
 
-	return &Queue{
+	q := &Queue{
 		messageQueue:    make(chan *Message, config.Queue.BufferSize),
 		config:          config,
 		sem:             make(chan struct{}, config.Queue.MaxConsumers),
@@ -43,6 +45,17 @@ func NewQueue(ctx context.Context, config *config.Config) *Queue {
 		publisherCtx:    publisherCtx,
 		publisherCancel: cancel, // Store the cancel function
 	}
+
+	if config.Delivery.Outbound.DKIM.Enabled {
+		signer, err := delivery.NewDKIMSigner(&config.Delivery.Outbound.DKIM)
+		if err != nil {
+			cancel()
+			return nil, fmt.Errorf("queue: init DKIM signer: %w", err)
+		}
+		q.dkimSigner = signer
+	}
+
+	return q, nil
 }
 
 // StartConsumer starts the consumer loop in a goroutine (non-blocking)
@@ -237,7 +250,7 @@ func (q *Queue) processMessage(ctx context.Context, msg *Message) {
 	if len(outboundRecipients) > 0 {
 		go func() {
 			maxWorkers := delivery.GetMaxWorkers(q.config.Delivery.Outbound.MaxWorkers, len(outboundRecipients))
-			resultChan <- delivery.DeliverOutboundWithWorkers(ctx, outboundRecipients, maxWorkers, msg, messagePath, &q.config.Delivery.Outbound)
+			resultChan <- delivery.DeliverOutboundWithWorkers(ctx, outboundRecipients, maxWorkers, msg, messagePath, &q.config.Delivery.Outbound, q.dkimSigner)
 		}()
 	}
 

@@ -115,6 +115,14 @@ type OutboundDeliveryConfig struct {
 	RetryMaxAge   time.Duration        `yaml:"retry_max_age"`
 	Timeouts      OutboundTimeouts     `yaml:"timeouts"`
 	TLS           OutboundTLSConfig    `yaml:"tls"`
+	DKIM          DKIMConfig           `yaml:"dkim"`
+}
+
+type DKIMConfig struct {
+	Enabled        bool   `yaml:"enabled"`
+	Domain         string `yaml:"domain"`
+	Selector       string `yaml:"selector"`
+	PrivateKeyFile string `yaml:"private_key_file"`
 }
 
 type OutboundTimeouts struct {

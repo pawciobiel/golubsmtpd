@@ -46,6 +46,7 @@ type domainResult struct {
 
 // DeliverOutboundWithWorkers delivers msg to all outbound recipients via direct MX.
 // Recipients are grouped by domain; maxWorkers limits concurrent domain connections.
+// signer may be nil when DKIM signing is disabled.
 func DeliverOutboundWithWorkers(
 	ctx context.Context,
 	recipients map[string]struct{},
@@ -53,6 +54,7 @@ func DeliverOutboundWithWorkers(
 	msg *types.Message,
 	messagePath string,
 	cfg *config.OutboundDeliveryConfig,
+	signer *DKIMSigner,
 ) DeliveryResult {
 	result := DeliveryResult{
 		Type:       RecipientExternal,
@@ -82,7 +84,7 @@ func DeliverOutboundWithWorkers(
 		sem <- struct{}{}
 		go func() {
 			defer func() { <-sem }()
-			resultChan <- deliverToDomain(ctx, msg, messagePath, domain, addrs, cfg)
+			resultChan <- deliverToDomain(ctx, msg, messagePath, domain, addrs, cfg, signer)
 		}()
 	}
 
@@ -111,7 +113,7 @@ func groupByDomain(recipients map[string]struct{}) map[string][]string {
 }
 
 // deliverToDomain attempts delivery to all recipients at a single domain via MX.
-func deliverToDomain(ctx context.Context, msg *types.Message, messagePath, domain string, recipients []string, cfg *config.OutboundDeliveryConfig) domainResult {
+func deliverToDomain(ctx context.Context, msg *types.Message, messagePath, domain string, recipients []string, cfg *config.OutboundDeliveryConfig, signer *DKIMSigner) domainResult {
 	result := domainResult{domain: domain}
 
 	mxHosts, err := lookupMX(ctx, domain)
@@ -128,7 +130,7 @@ func deliverToDomain(ctx context.Context, msg *types.Message, messagePath, domai
 			continue
 		}
 
-		outcomes := sendViaSMTP(ctx, conn, r, mx, msg, messagePath, recipients, cfg)
+		outcomes := sendViaSMTP(ctx, conn, r, mx, msg, messagePath, recipients, cfg, signer)
 		conn.Close()
 
 		for _, o := range outcomes {
@@ -407,6 +409,7 @@ func sendViaSMTP(
 	messagePath string,
 	recipients []string,
 	cfg *config.OutboundDeliveryConfig,
+	signer *DKIMSigner,
 ) []recipientOutcome {
 	_, isTLS := conn.(*tls.Conn)
 
@@ -486,23 +489,40 @@ func sendViaSMTP(
 		}
 		return outcomes
 	}
+	defer f.Close()
 
 	w := textproto.NewWriter(bufio.NewWriter(conn)).DotWriter()
-	buf := make([]byte, 32*1024)
 	writeErr := false
-	for {
-		n, readErr := f.Read(buf)
-		if n > 0 {
-			if _, werr := w.Write(buf[:n]); werr != nil {
+
+	if signer != nil {
+		sig, sigErr := signer.SignFile(f)
+		if sigErr != nil {
+			slog.Warn("DKIM signing failed, sending unsigned", "host", host, "error", sigErr)
+			if _, seekErr := f.Seek(0, 0); seekErr != nil {
 				writeErr = true
+			}
+		} else {
+			if _, werr := fmt.Fprint(w, sig); werr != nil {
+				writeErr = true
+			}
+		}
+	}
+
+	if !writeErr {
+		buf := make([]byte, 32*1024)
+		for {
+			n, readErr := f.Read(buf)
+			if n > 0 {
+				if _, werr := w.Write(buf[:n]); werr != nil {
+					writeErr = true
+					break
+				}
+			}
+			if readErr != nil {
 				break
 			}
 		}
-		if readErr != nil {
-			break
-		}
 	}
-	f.Close()
 	w.Close()
 
 	conn.SetDeadline(time.Time{}) //nolint:errcheck
