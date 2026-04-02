@@ -1,0 +1,21 @@
+services:
+  golubsmtpd:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:587:587"
+    volumes:
+      - ./golubsmtpd/conf:/data/conf:ro
+      - ./golubsmtpd/spool:/data/spool
+      - ./golubsmtpd/mail:/data/mail
+    environment:
+      - TZ=UTC
+
+  # Your backend service — connect to golubsmtpd:587 with SMTP AUTH
+  # backend:
+  #   image: yourapp:latest
+  #   environment:
+  #     SMTP_HOST: golubsmtpd
+  #     SMTP_PORT: 587
+  #     SMTP_USER: noreply@example.com
+  #     SMTP_PASS: changeme

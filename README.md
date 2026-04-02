@@ -401,6 +401,67 @@ queue:
       gmail.com: "50/min"
 ```
 
+## Docker Deployment (Webapp / Transactional Mail)
+
+This setup is intended for a backend web application that needs to send transactional email
+(confirmations, password resets, etc.) via a single authenticated account.
+
+### Files
+
+| File | Purpose |
+|------|---------|
+| `Dockerfile` | Multi-stage build — produces a minimal `scratch`-based image |
+| `docker-compose.webapp.yaml` | Example compose file for a webapp backend |
+| `configs/golubsmtpd.webapp.yaml` | Server config for the webapp use case |
+| `configs/users.webapp.yaml` | Single-user credentials file (file auth backend) |
+
+### Directory layout on the host
+
+```
+./golubsmtpd/
+  conf/
+    golubsmtpd.yaml   ← copy from configs/golubsmtpd.webapp.yaml, edit hostname/domain
+    users.yaml        ← copy from configs/users.webapp.yaml, set username/password
+  spool/              ← queue state, persisted across restarts
+  mail/               ← Maildir delivery (optional)
+```
+
+### Setup
+
+```bash
+# 1. Create directories
+mkdir -p golubsmtpd/{conf,spool,mail}
+
+# 2. Copy and edit config
+cp configs/golubsmtpd.webapp.yaml golubsmtpd/conf/golubsmtpd.yaml
+cp configs/users.webapp.yaml golubsmtpd/conf/users.yaml
+# Edit both files: set your hostname, domain, username, and a strong password
+
+# 3. Start
+docker compose -f docker-compose.webapp.yaml up -d
+```
+
+### Connecting from the backend
+
+The SMTP server is reachable from sibling services in the same compose network as `golubsmtpd:587`.
+On the host it is bound to `127.0.0.1:587` only (not exposed publicly).
+
+```
+SMTP_HOST=golubsmtpd
+SMTP_PORT=587
+SMTP_USER=noreply@example.com
+SMTP_PASS=<password from users.yaml>
+```
+
+### Notes
+
+- Port 587 requires SMTP AUTH — unauthenticated submission is rejected.
+- `bind: 0.0.0.0` is required inside the container; the host-side binding restricts exposure.
+- Reverse DNS checking is disabled by default (containers rarely have PTR records).
+- DNSBL checking is enabled by default and will reject connections from known spam sources.
+- For outbound delivery to work, the sending IP needs PTR, SPF, DKIM, and DMARC records.
+  See the `dkim` section in the config reference and Phase 5 in `CLAUDE.md`.
+
 ## Development
 
 - **Go Version**: 1.25.0

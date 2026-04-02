@@ -1,0 +1,61 @@
+server:
+  bind: "0.0.0.0"
+  port: 587
+  hostname: "mail.example.com"
+  max_connections: 100
+  max_connections_per_ip: 10
+  max_recipients: 10
+  max_message_size: 10485760  # 10MB
+  read_timeout: "30s"
+  write_timeout: "30s"
+  email_validation: ["basic", "extended"]
+  local_domains: []
+  virtual_domains: ["example.com"]
+  relay_domains: []
+  spool_dir: "/data/spool"
+
+tls:
+  enabled: false
+
+auth:
+  plugin_chain: ["file"]
+  plugins:
+    file:
+      users_file: "/data/conf/users.yaml"
+
+security:
+  reverse_dns:
+    enabled: false
+    reject_on_fail: false
+  dnsbl:
+    enabled: true
+    check_ip: true
+    check_sender_domain: false
+    providers:
+      - "zen.spamhaus.org"
+      - "bl.spamcop.net"
+    action: "reject"
+
+logging:
+  level: "info"
+  format: "text"
+
+queue:
+  buffer_size: 50
+  max_consumers: 5
+
+delivery:
+  virtual:
+    base_dir_path: "/data/mail"
+    max_workers: 5
+  outbound:
+    tls:
+      policy: "opportunistic"
+      min_version: "tls12"
+      skip_verify: false
+    timeouts:
+      dial: "10s"
+      greeting: "30s"
+      command: "30s"
+      tls_handshake: "15s"
+      data_transfer: "5m"

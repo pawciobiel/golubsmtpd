@@ -1,0 +1,5 @@
+users:
+  - username: "noreply@example.com"
+    password: "changeme"
+    allowed_senders:
+      - "noreply@example.com"
